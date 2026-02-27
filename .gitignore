@@ -1,3 +1,9 @@
-# Godot 4+ specific ignores
-.godot/
-/android/
+# Godot exports
+GameDev.exe
+GameDev.pck
+*.exe
+*.pck
+
+# Optional: export folder
+exports/
+build/
