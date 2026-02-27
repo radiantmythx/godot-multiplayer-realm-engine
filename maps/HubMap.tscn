@@ -1,0 +1,58 @@
+[gd_scene load_steps=6 format=3 uid="uid://pmpvpqg4kt2x"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_6rxlf"]
+sky_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+ground_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+
+[sub_resource type="Sky" id="Sky_v8lq1"]
+sky_material = SubResource("ProceduralSkyMaterial_6rxlf")
+
+[sub_resource type="Environment" id="Environment_ssbbs"]
+background_mode = 2
+sky = SubResource("Sky_v8lq1")
+tonemap_mode = 2
+glow_enabled = true
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_6rxlf"]
+size = Vector3(25, 0.1, 25)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_v8lq1"]
+size = Vector2(25, 25)
+
+[node name="HubMap" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_ssbbs")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -0.500003, 0.749999, -0.43301, 0, 0, 0)
+shadow_enabled = true
+
+[node name="WorldGeometry" type="Node3D" parent="."]
+
+[node name="StaticBody3D" type="StaticBody3D" parent="WorldGeometry"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WorldGeometry/StaticBody3D"]
+shape = SubResource("BoxShape3D_6rxlf")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WorldGeometry/StaticBody3D"]
+mesh = SubResource("PlaneMesh_v8lq1")
+
+[node name="SpawnPoints" type="Node3D" parent="."]
+
+[node name="Spawn_0" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.37048, 0, 0)
+
+[node name="Spawn_1" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.18649, 0, 0)
+
+[node name="Spawn_2" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, 0)
+
+[node name="Spawn_3" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, 2.10268)
+
+[node name="Spawn_4" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, -1.97344)
+
+[node name="Players" type="Node3D" parent="."]

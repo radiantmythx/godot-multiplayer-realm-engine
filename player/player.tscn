@@ -1,0 +1,37 @@
+[gd_scene load_steps=6 format=3 uid="uid://brxsbahi2jo1t"]
+
+[ext_resource type="Script" uid="uid://dkijkyomku5lu" path="res://player/player.gd" id="1_4flbx"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_4flbx"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_sh265"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_4flbx"]
+
+[sub_resource type="PrismMesh" id="PrismMesh_4flbx"]
+
+[node name="PlayerContainer" type="Node3D"]
+script = ExtResource("1_4flbx")
+
+[node name="Player" type="CharacterBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+shape = SubResource("CapsuleShape3D_4flbx")
+
+[node name="Visual" type="Node3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Player/Visual"]
+mesh = SubResource("CapsuleMesh_sh265")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_4flbx")
+
+[node name="MeshInstance3D2" type="MeshInstance3D" parent="Player/Visual"]
+transform = Transform3D(1, 0, 0, 0, 0.0204364, -0.999791, 0, 0.999791, 0.0204364, 0, 0, 0.332664)
+mesh = SubResource("PrismMesh_4flbx")
+
+[node name="CameraRig" type="Node3D" parent="."]
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+transform = Transform3D(1, 0, 0, 0, 0.351727, 0.936103, 0, -0.936103, 0.351727, 0, 10.8824, 3.24255)

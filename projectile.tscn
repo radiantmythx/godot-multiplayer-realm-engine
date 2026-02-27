@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3 uid="uid://d0esb7304gpvt"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_akgne"]
+radius = 0.25
+height = 0.5
+
+[node name="ProjectileRoot" type="Node3D"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_akgne")

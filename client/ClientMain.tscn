@@ -1,0 +1,19 @@
+[gd_scene load_steps=5 format=3 uid="uid://cfcwmv4qack6l"]
+
+[ext_resource type="Script" uid="uid://bxby86khydbdv" path="res://client/ClientMain.gd" id="1_61oad"]
+[ext_resource type="PackedScene" uid="uid://brxsbahi2jo1t" path="res://player/player.tscn" id="2_5b5bw"]
+[ext_resource type="PackedScene" uid="uid://d0esb7304gpvt" path="res://projectile.tscn" id="3_qmj76"]
+[ext_resource type="PackedScene" uid="uid://dfco2pe6vs20i" path="res://target.tscn" id="4_ea4ok"]
+
+[node name="Net" type="Node"]
+script = ExtResource("1_61oad")
+player_scene = ExtResource("2_5b5bw")
+projectile_scene = ExtResource("3_qmj76")
+target_scene = ExtResource("4_ea4ok")
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="CanvasLayer"]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "CLIENT"

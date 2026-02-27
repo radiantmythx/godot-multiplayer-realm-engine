@@ -1,0 +1,12 @@
+[gd_scene load_steps=5 format=3 uid="uid://cxrj5umcetu27"]
+
+[ext_resource type="Script" uid="uid://v7mayp60fs5r" path="res://app/AppMain.gd" id="1_pnhaq"]
+[ext_resource type="PackedScene" uid="uid://8ln4810ubths" path="res://realm/RealmServer.tscn" id="2_n1xcf"]
+[ext_resource type="PackedScene" uid="uid://b314kecxb1qdl" path="res://zone/ZoneServer.tscn" id="3_joie1"]
+[ext_resource type="PackedScene" uid="uid://cfcwmv4qack6l" path="res://client/ClientMain.tscn" id="4_gh35w"]
+
+[node name="AppMain" type="Node"]
+script = ExtResource("1_pnhaq")
+realm_server_scene = ExtResource("2_n1xcf")
+zone_server_scene = ExtResource("3_joie1")
+client_scene = ExtResource("4_gh35w")
