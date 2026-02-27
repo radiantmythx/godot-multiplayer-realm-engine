@@ -1,0 +1,14 @@
+MeshInstance3D
+MultiplayerSynchronizer
+Camera3D
+MultiplayerSpawner
+Node3D
+Label
+CanvasLayer
+Node
+CollisionShape3D
+StaticBody3D
+Marker3D
+Button
+ItemList
+VBoxContainer
