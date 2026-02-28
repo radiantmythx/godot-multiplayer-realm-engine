@@ -17,3 +17,6 @@ res://client/ui/LoginScreen.tscn
 res://client/ui/LoginScreen.gd
 res://client/ClientSession.gd
 res://app/AppMain.gd
+res://zone/ZoneRealmLink.gd
+res://zone/ZoneServer.gd
+res://shared/NetJson.gd

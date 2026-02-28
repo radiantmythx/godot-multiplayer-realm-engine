@@ -10,6 +10,8 @@ const INTERNAL_TCP_PORT := 4001
 const HUB_MAP_ID := "res://maps/HubMap.tscn" # change to your hub scene path
 const ZONE_EXE_REL := "ZoneServer" # exported name later; for editor runs we’ll use godot --path
 
+const ZONE_HEARTBEAT_TIMEOUT := 6 # seconds (Zone sends every 2s)
+
 var ticket_secret: String = "dev_secret_change_me"
 var jwt_secret: String = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
 
@@ -17,16 +19,19 @@ var jwt_secret: String = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
 var instances: Dictionary = {}
 # port -> bool allocated
 var port_alloc: Dictionary = {}
+
 # internal TCP server for zones
 var tcp_server := TCPServer.new()
 var zone_peers: Array[StreamPeerTCP] = []
-var zone_buffers: Dictionary = {} # peer_id(string) -> PackedByteArray
+var zone_buffers: Dictionary = {} # peer_key(string) -> PackedByteArray
+var peer_to_instance: Dictionary = {} # peer_key(string) -> instance_id(int)
 
 # peer_id -> { account_id:int, username:String, exp:int }
 var auth_sessions: Dictionary = {}
 
 func _ready() -> void:
 	ProcLog.lines(["[REALM] path: " + str(get_path())])
+
 	# init ports
 	for p in range(ZONE_PORT_START, ZONE_PORT_END + 1):
 		port_alloc[p] = false
@@ -39,6 +44,7 @@ func _ready() -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	ProcLog.lines(["[REALM] ENet listening on ", REALM_PORT])
+
 	multiplayer.peer_connected.connect(func(id): ProcLog.lines(["[REALM] client connected: ", id]))
 	multiplayer.peer_disconnected.connect(func(id):
 		ProcLog.lines(["[REALM] client disconnected: ", id])
@@ -66,47 +72,93 @@ func _accept_zone_tcp() -> void:
 			ProcLog.lines(["[REALM] Zone TCP connected: ", key])
 
 func _poll_zone_tcp() -> void:
-	for p in zone_peers:
-		if p.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	var now := int(Time.get_unix_time_from_system())
+
+	# iterate backwards so we can remove safely
+	for i in range(zone_peers.size() - 1, -1, -1):
+		var p := zone_peers[i]
+		var status := p.get_status()
+		var peer_key := str(p.get_instance_id())
+
+		if status != StreamPeerTCP.STATUS_CONNECTED:
+			ProcLog.lines(["[REALM] Zone TCP disconnected: ", peer_key, " status=", status])
+
+			# if this peer owned an instance, kill it
+			if peer_to_instance.has(peer_key):
+				var instance_id := int(peer_to_instance[peer_key])
+				peer_to_instance.erase(peer_key)
+				_on_instance_dead(instance_id)
+
+			zone_buffers.erase(peer_key)
+			zone_peers.remove_at(i)
 			continue
-		var key := str(p.get_instance_id())
-		var buf: PackedByteArray = zone_buffers.get(key, PackedByteArray())
-		var msgs := NetJson.poll_lines(p, buf)
-		zone_buffers[key] = buf
-		for m in msgs:
+
+		var buf: PackedByteArray = zone_buffers.get(peer_key, PackedByteArray())
+		var r := NetJson.poll_lines(p, buf)
+		zone_buffers[peer_key] = r.buffer
+		for m in r.msgs:
 			_on_zone_msg(p, m)
 
-func _on_zone_msg(_p: StreamPeerTCP, m: Dictionary) -> void:
+	_prune_dead_instances(now)
+
+func _on_zone_msg(p: StreamPeerTCP, m: Dictionary) -> void:
 	var t = m.get("type", "")
+	var peer_key := str(p.get_instance_id())
+
 	match t:
 		"READY":
 			var instance_id := int(m.get("instance_id", -1))
 			var port := int(m.get("port", -1))
 			var cap := int(m.get("capacity", 0))
+
 			ProcLog.lines(["[REALM] Zone READY instance=", instance_id, " port=", port, " cap=", cap])
+
+			# bind this TCP peer to the instance it owns (so disconnect => instance dead)
+			peer_to_instance[peer_key] = instance_id
+
 			# mark instance running
 			for k in instances.keys():
-				if instances[k].instance_id == instance_id:
+				if int(instances[k].instance_id) == instance_id:
 					instances[k].status = "RUNNING"
 					instances[k].capacity = cap
 					instances[k].last_heartbeat = Time.get_unix_time_from_system()
+
 		"HEARTBEAT":
 			var instance_id := int(m.get("instance_id", -1))
 			var pc := int(m.get("player_count", 0))
 			for k in instances.keys():
-				if instances[k].instance_id == instance_id:
+				if int(instances[k].instance_id) == instance_id:
 					instances[k].player_count = pc
 					instances[k].last_heartbeat = Time.get_unix_time_from_system()
+
 		"SHUTDOWN":
 			var instance_id := int(m.get("instance_id", -1))
 			_on_instance_dead(instance_id)
+
 		_:
 			ProcLog.lines(["[REALM] Unknown zone msg: ", m])
 
-func _on_instance_dead(instance_id: int) -> void:
+func _prune_dead_instances(now: int) -> void:
 	for k in instances.keys():
-		if instances[k].instance_id == instance_id:
-			var port = instances[k].port
+		var inst = instances[k]
+		if inst.status != "RUNNING":
+			continue
+		var last := int(inst.get("last_heartbeat", 0))
+		if last > 0 and (now - last) > ZONE_HEARTBEAT_TIMEOUT:
+			ProcLog.lines(["[REALM] Heartbeat timeout instance=", inst.instance_id, " last=", last, " now=", now])
+			_on_instance_dead(int(inst.instance_id))
+
+func _on_instance_dead(instance_id: int) -> void:
+	# Remove any peer_to_instance bindings that pointed to this instance.
+	# (If the peer disconnect handler already ran, this is a no-op.)
+	for pk in peer_to_instance.keys():
+		if int(peer_to_instance[pk]) == instance_id:
+			peer_to_instance.erase(pk)
+			break
+
+	for k in instances.keys():
+		if int(instances[k].instance_id) == instance_id:
+			var port = int(instances[k].port)
 			ProcLog.lines(["[REALM] Instance DEAD instance=", instance_id, " freeing port ", port])
 			port_alloc[port] = false
 			instances.erase(k)
@@ -133,7 +185,7 @@ func c_request_enter_hub(character_id: int) -> void:
 	var now := int(Time.get_unix_time_from_system())
 	var auth = auth_sessions[client_peer_id]
 	var payload := {
-		"instance_id": inst.instance_id,
+		"instance_id": int(inst.instance_id),
 		"character_id": character_id,
 		"account_id": int(auth.account_id),
 		"session_id": str(client_peer_id), # simple for now
@@ -145,10 +197,10 @@ func c_request_enter_hub(character_id: int) -> void:
 
 	rpc_id(client_peer_id, "s_travel_to_zone", {
 		"host": "127.0.0.1", # replace with public IP later
-		"port": inst.port,
-		"instance_id": inst.instance_id,
-		"map_id": inst.map_id,
-		"seed": inst.seed,
+		"port": int(inst.port),
+		"instance_id": int(inst.instance_id),
+		"map_id": str(inst.map_id),
+		"seed": int(inst.seed),
 		"join_ticket": token
 	})
 
@@ -165,14 +217,24 @@ func s_travel_failed(_reason: String) -> void:
 
 func _get_or_create_hub() -> Variant:
 	var key := "hub:default"
-	# reuse if running with capacity
+	var now := int(Time.get_unix_time_from_system())
+
+	# reuse if running with capacity AND not stale
 	if instances.has(key):
 		var inst = instances[key]
-		if inst.status == "RUNNING" and inst.player_count < inst.capacity:
-			return inst
+
+		if inst.status == "RUNNING":
+			var last := int(inst.get("last_heartbeat", 0))
+			if last > 0 and (now - last) > ZONE_HEARTBEAT_TIMEOUT:
+				ProcLog.lines(["[REALM] Hub stale; respawning instance=", inst.instance_id])
+				_on_instance_dead(int(inst.instance_id))
+			elif inst.player_count < inst.capacity:
+				return inst
+
 		# If STARTING, allow travel anyway? I prefer not: wait until READY.
 		if inst.status == "STARTING":
 			return inst # okay for early dev; client will connect shortly after READY
+
 	# otherwise create
 	return _create_instance(key, "HUB", HUB_MAP_ID, 42, 32)
 
@@ -215,7 +277,7 @@ func _spawn_zone_process(inst: Dictionary) -> void:
 	# Optional per-zone log file
 	var log_dir := ProjectSettings.globalize_path("user://zone_logs")
 	DirAccess.make_dir_recursive_absolute(log_dir)
-	var log_path := "%s/zone_%d_%d.log" % [log_dir, inst.port, inst.instance_id]
+	var log_path := "%s/zone_%d_%d.log" % [log_dir, int(inst.port), int(inst.instance_id)]
 
 	# Spawn marker (so we know Realm attempted it)
 	var f := FileAccess.open(log_path, FileAccess.WRITE)
@@ -225,10 +287,10 @@ func _spawn_zone_process(inst: Dictionary) -> void:
 
 	var args := [
 		"--mode=zone",
-		"--port=%d" % inst.port,
-		"--instance_id=%d" % inst.instance_id,
-		"--map_id=%s" % inst.map_id,
-		"--seed=%d" % inst.seed,
+		"--port=%d" % int(inst.port),
+		"--instance_id=%d" % int(inst.instance_id),
+		"--map_id=%s" % str(inst.map_id),
+		"--seed=%d" % int(inst.seed),
 		"--realm_port=%d" % INTERNAL_TCP_PORT,
 		"--ticket_secret=%s" % ticket_secret,
 		"--log=%s" % log_path, # optional custom log arg
@@ -237,10 +299,10 @@ func _spawn_zone_process(inst: Dictionary) -> void:
 	var pid := OS.create_process(exe_path, args)
 
 	ProcLog.lines(["[REALM] Spawned Zone pid=", pid,
-		" port=", inst.port,
-		" instance=", inst.instance_id])
+		" port=", int(inst.port),
+		" instance=", int(inst.instance_id)])
 	ProcLog.lines(["[REALM] Zone spawn cmd: ", exe_path, " ", str(args)])
-	
+
 @rpc("any_peer", "reliable")
 func c_authenticate(jwt: String) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -268,7 +330,7 @@ func c_authenticate(jwt: String) -> void:
 
 	# optional ack to client
 	rpc_id(peer_id, "s_auth_ok", { "account_id": account_id, "username": uname })
-	
+
 @rpc("authority", "reliable")
 func s_join_accepted(_data: Dictionary) -> void:
 	pass
@@ -276,9 +338,9 @@ func s_join_accepted(_data: Dictionary) -> void:
 @rpc("authority", "reliable")
 func s_join_rejected(_reason: String) -> void:
 	pass
-	
+
 @rpc("any_peer", "reliable")
-func c_join_instance(join_ticket: String, character_id: int) -> void:
+func c_join_instance(_join_ticket: String, _character_id: int) -> void:
 	pass
 
 @rpc("any_peer", "unreliable")

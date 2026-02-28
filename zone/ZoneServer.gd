@@ -18,8 +18,10 @@ var log_f: FileAccess = null
 
 var snapshot_timer: Timer
 var projectile_timer: Timer
+var heartbeat_timer: Timer
 
 var spawned_test_targets := false
+var _quitting := false
 
 # modules
 var world: ZoneWorld
@@ -88,19 +90,28 @@ func _ready() -> void:
 	targets.configure(target_scene, world.world_root)
 	projectiles.configure(projectile_scene, world.world_root)
 
-	# Connect to Realm internal TCP and send READY
 	realm_link.connect_to_realm("127.0.0.1", realm_port)
-	realm_link.send_ready(instance_id, port, 32)
+
+	var deadline_ms := Time.get_ticks_msec() + 1500
+	while not realm_link.realm_tcp_connected() and Time.get_ticks_msec() < deadline_ms:
+		realm_link.poll() # drives StreamPeerTCP state machine
+		await get_tree().process_frame
+
+	if realm_link.realm_tcp_connected():
+		realm_link.send_ready(instance_id, port, 32)
+		_log("[ZONE] Sent READY to Realm")
+	else:
+		_log("[ZONE] WARNING: Realm TCP never connected; continuing without READY")
 
 	# heartbeat timer
-	var hb := Timer.new()
-	hb.wait_time = 2.0
-	hb.one_shot = false
-	hb.timeout.connect(func():
+	heartbeat_timer = Timer.new()
+	heartbeat_timer.wait_time = 2.0
+	heartbeat_timer.one_shot = false
+	heartbeat_timer.timeout.connect(func():
 		realm_link.send_heartbeat(instance_id, players.get_player_count())
 	)
-	add_child(hb)
-	hb.start()
+	add_child(heartbeat_timer)
+	heartbeat_timer.start()
 
 	# snapshot timer
 	snapshot_timer = Timer.new()
@@ -121,8 +132,33 @@ func _ready() -> void:
 func _process(_dt: float) -> void:
 	realm_link.poll()
 
-func _on_realm_shutdown_requested(_reason: String) -> void:
-	realm_link.send_shutdown(instance_id)
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_log("[ZONE] WM_CLOSE_REQUEST")
+		_graceful_shutdown("window_close")
+
+func _exit_tree() -> void:
+	# best-effort on any exit path
+	if realm_link:
+		realm_link.send_shutdown(instance_id)
+
+func _on_realm_shutdown_requested(reason: String) -> void:
+	_graceful_shutdown("realm_request:" + reason)
+
+func _graceful_shutdown(_reason: String) -> void:
+	if _quitting:
+		return
+	_quitting = true
+
+	if heartbeat_timer: heartbeat_timer.stop()
+	if snapshot_timer: snapshot_timer.stop()
+	if projectile_timer: projectile_timer.stop()
+
+	if realm_link:
+		realm_link.send_shutdown(instance_id)
+
+	# give TCP a moment to flush (best-effort)
+	await get_tree().create_timer(0.05).timeout
 	get_tree().quit()
 
 # ---------------- Client connections ----------------
@@ -135,7 +171,6 @@ func _on_client_disconnected(id: int) -> void:
 
 	players.remove_peer(id)
 
-	# tell everyone to despawn that peer
 	for pid in multiplayer.get_peers():
 		rpc_id(pid, "s_despawn_player", id)
 
@@ -165,22 +200,18 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 	var spawn_xform := world.get_next_spawn_transform()
 	players.add_peer(peer_id, character_id, spawn_xform)
 
-	# who you are
 	rpc_id(peer_id, "s_join_accepted", {
 		"instance_id": instance_id,
 		"you_peer_id": peer_id
 	})
 
-	# spawn everyone for the joiner
 	rpc_id(peer_id, "s_spawn_players_bulk", players.build_spawn_bulk_list())
 
-	# spawn the new guy for everyone else
 	for pid2 in multiplayer.get_peers():
 		if pid2 == peer_id:
 			continue
 		rpc_id(pid2, "s_spawn_player", peer_id, character_id, spawn_xform)
 
-	# spawn targets once (now that at least one peer exists)
 	if not spawned_test_targets:
 		spawned_test_targets = true
 		var spawned := targets.spawn_test_targets()
@@ -188,11 +219,10 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 			for pid in multiplayer.get_peers():
 				rpc_id(pid, "s_spawn_target", int(s.id), s.xform, int(s.hp))
 
-	# send existing targets to late joiner
 	for tinfo in targets.get_target_snapshot_list():
 		rpc_id(peer_id, "s_spawn_target", int(tinfo.id), tinfo.xform, int(tinfo.hp))
 
-# ---------------- Movement (input -> server) ----------------
+# ---------------- Movement ----------------
 
 @rpc("any_peer", "unreliable")
 func c_set_move_target(world_pos: Vector3) -> void:
@@ -223,12 +253,10 @@ func _tick_projectiles() -> void:
 	var despawn: Array = result.despawn
 	var hits: Array = result.hits
 
-	# apply hits (authoritative)
 	for h in hits:
 		var tid := int(h.target_id)
 		var r := targets.apply_damage(tid, 1)
 
-		# update clients
 		if r.exists:
 			for pid in multiplayer.get_peers():
 				rpc_id(pid, "s_target_hp", tid, int(r.hp))
@@ -236,12 +264,10 @@ func _tick_projectiles() -> void:
 			for pid in multiplayer.get_peers():
 				rpc_id(pid, "s_break_target", tid)
 
-	# projectile snapshots
 	if snaps.size() > 0:
 		for pid in multiplayer.get_peers():
 			rpc_id(pid, "s_projectile_snapshots", snaps)
 
-	# projectile despawns
 	for proj_id in despawn:
 		for pid in multiplayer.get_peers():
 			rpc_id(pid, "s_despawn_projectile", int(proj_id))
@@ -256,15 +282,12 @@ func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 		return
 	dir = dir.normalized()
 
-	# rotate player to face direction (yaw only)
 	var yaw := atan2(dir.x, dir.z)
 	players.set_yaw(peer_id, yaw)
 
 	var xform := players.get_player_xform(peer_id)
 	xform.basis = Basis(Vector3.UP, yaw)
 
-	# IMPORTANT: keep authoritative xform update inside player state
-	# (store back)
 	var st: Dictionary = players.players_by_peer[peer_id]
 	st["xform"] = xform
 	st["yaw"] = yaw
@@ -274,7 +297,6 @@ func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	if spawn.is_empty():
 		return
 
-	# tell clients to spawn
 	for pid in multiplayer.get_peers():
 		rpc_id(pid, "s_spawn_projectile", int(spawn.proj_id), int(spawn.owner), spawn.px, spawn.vel)
 

@@ -9,19 +9,41 @@ var log: Callable = func(_m): pass
 var tcp := StreamPeerTCP.new()
 var tcp_buf := PackedByteArray()
 
+var _last_status: int = -999
+var _target_host: String = ""
+var _target_port: int = 0
+
 func connect_to_realm(host: String, port: int) -> void:
+	_target_host = host
+	_target_port = port
+
 	var e := tcp.connect_to_host(host, port)
 	if e != OK:
-		log.call("[ZONE] Failed connect to Realm TCP: %s" % str(e))
+		log.call("[ZONE] Failed connect_to_host %s:%d err=%s" % [host, port, str(e)])
 	else:
-		log.call("[ZONE] Connected to Realm TCP on %d" % port)
+		log.call("[ZONE] connect_to_host issued for %s:%d" % [host, port])
+
+	_last_status = -999 # force status log on next poll
+
+func realm_tcp_connected() -> bool:
+	return tcp.get_status() == StreamPeerTCP.STATUS_CONNECTED
 
 func poll() -> void:
-	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	# IMPORTANT: StreamPeerTCP requires polling to advance connection state in Godot 4
+	tcp.poll()
+
+	var st := tcp.get_status()
+	if st != _last_status:
+		_last_status = st
+		log.call("[ZONE] Realm TCP status -> %s" % _status_name(st))
+
+	# only read when connected
+	if st != StreamPeerTCP.STATUS_CONNECTED:
 		return
 
-	var msgs := NetJson.poll_lines(tcp, tcp_buf)
-	for m in msgs:
+	var r := NetJson.poll_lines(tcp, tcp_buf)
+	tcp_buf = r.buffer
+	for m in r.msgs:
 		_on_realm_msg(m)
 
 func _on_realm_msg(m: Dictionary) -> void:
@@ -31,7 +53,7 @@ func _on_realm_msg(m: Dictionary) -> void:
 		shutdown_requested.emit(reason)
 
 func send_ready(instance_id: int, port: int, capacity: int) -> void:
-	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	if not realm_tcp_connected():
 		return
 	NetJson.send_line(tcp, {
 		"type": "READY",
@@ -41,7 +63,7 @@ func send_ready(instance_id: int, port: int, capacity: int) -> void:
 	})
 
 func send_heartbeat(instance_id: int, player_count: int) -> void:
-	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	if not realm_tcp_connected():
 		return
 	NetJson.send_line(tcp, {
 		"type": "HEARTBEAT",
@@ -50,9 +72,22 @@ func send_heartbeat(instance_id: int, player_count: int) -> void:
 	})
 
 func send_shutdown(instance_id: int) -> void:
-	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	if not realm_tcp_connected():
 		return
 	NetJson.send_line(tcp, {
 		"type": "SHUTDOWN",
 		"instance_id": instance_id
 	})
+
+func _status_name(st: int) -> String:
+	match st:
+		StreamPeerTCP.STATUS_NONE:
+			return "NONE"
+		StreamPeerTCP.STATUS_CONNECTING:
+			return "CONNECTING"
+		StreamPeerTCP.STATUS_CONNECTED:
+			return "CONNECTED"
+		StreamPeerTCP.STATUS_ERROR:
+			return "ERROR"
+		_:
+			return "UNKNOWN(%d)" % st
