@@ -11,6 +11,7 @@ const HUB_MAP_ID := "res://maps/HubMap.tscn" # change to your hub scene path
 const ZONE_EXE_REL := "ZoneServer" # exported name later; for editor runs we’ll use godot --path
 
 var ticket_secret: String = "dev_secret_change_me"
+var jwt_secret: String = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
 
 # Instance registry: key -> instance dict
 var instances: Dictionary = {}
@@ -20,6 +21,9 @@ var port_alloc: Dictionary = {}
 var tcp_server := TCPServer.new()
 var zone_peers: Array[StreamPeerTCP] = []
 var zone_buffers: Dictionary = {} # peer_id(string) -> PackedByteArray
+
+# peer_id -> { account_id:int, username:String, exp:int }
+var auth_sessions: Dictionary = {}
 
 func _ready() -> void:
 	ProcLog.lines(["[REALM] path: " + str(get_path())])
@@ -36,7 +40,10 @@ func _ready() -> void:
 	multiplayer.multiplayer_peer = peer
 	ProcLog.lines(["[REALM] ENet listening on ", REALM_PORT])
 	multiplayer.peer_connected.connect(func(id): ProcLog.lines(["[REALM] client connected: ", id]))
-	multiplayer.peer_disconnected.connect(func(id): ProcLog.lines(["[REALM] client disconnected: ", id]))
+	multiplayer.peer_disconnected.connect(func(id):
+		ProcLog.lines(["[REALM] client disconnected: ", id])
+		auth_sessions.erase(id)
+	)
 
 	# Start internal TCP server (localhost)
 	var err2 := tcp_server.listen(INTERNAL_TCP_PORT, "127.0.0.1")
@@ -112,6 +119,11 @@ func c_request_enter_hub(character_id: int) -> void:
 	var client_peer_id := multiplayer.get_remote_sender_id()
 	ProcLog.lines(["[REALM] enter_hub request from client=", client_peer_id, " char=", character_id])
 
+	if auth_sessions.has(client_peer_id) == false:
+		ProcLog.lines(["[REALM] enter_hub denied (unauth) peer=", client_peer_id])
+		rpc_id(client_peer_id, "s_travel_failed", "unauthenticated")
+		return
+
 	var inst = _get_or_create_hub()
 	if inst == null:
 		rpc_id(client_peer_id, "s_travel_failed", "no_capacity")
@@ -119,9 +131,11 @@ func c_request_enter_hub(character_id: int) -> void:
 
 	# issue ticket
 	var now := int(Time.get_unix_time_from_system())
+	var auth = auth_sessions[client_peer_id]
 	var payload := {
 		"instance_id": inst.instance_id,
 		"character_id": character_id,
+		"account_id": int(auth.account_id),
 		"session_id": str(client_peer_id), # simple for now
 		"iat": now,
 		"exp": now + 20,
@@ -227,6 +241,34 @@ func _spawn_zone_process(inst: Dictionary) -> void:
 		" instance=", inst.instance_id])
 	ProcLog.lines(["[REALM] Zone spawn cmd: ", exe_path, " ", str(args)])
 	
+@rpc("any_peer", "reliable")
+func c_authenticate(jwt: String) -> void:
+	var peer_id := multiplayer.get_remote_sender_id()
+
+	var result := JwtHs256.verify_and_decode(jwt, jwt_secret)
+	if result.ok == false:
+		ProcLog.lines(["[REALM] auth failed peer=", peer_id, " reason=", result.reason])
+		# Optional: kick them
+		multiplayer.multiplayer_peer.disconnect_peer(peer_id)
+		return
+
+	var claims: Dictionary = result.claims
+	# We set these in the API token service:
+	# uid (account id), uname (username), exp (unix seconds)
+	var account_id := int(claims.get("uid", 0))
+	var uname := str(claims.get("uname", ""))
+
+	auth_sessions[peer_id] = {
+		"account_id": account_id,
+		"username": uname,
+		"exp": int(claims.get("exp", 0))
+	}
+
+	ProcLog.lines(["[REALM] auth ok peer=", peer_id, " account=", account_id, " uname=", uname])
+
+	# optional ack to client
+	rpc_id(peer_id, "s_auth_ok", { "account_id": account_id, "username": uname })
+	
 @rpc("authority", "reliable")
 func s_join_accepted(_data: Dictionary) -> void:
 	pass
@@ -253,3 +295,7 @@ func s_despawn_player(_peer_id: int) -> void: pass
 
 @rpc("authority", "unreliable")
 func s_apply_snapshots(_snaps: Array) -> void: pass
+
+@rpc("authority", "reliable")
+func s_auth_ok(_data: Dictionary) -> void:
+	pass

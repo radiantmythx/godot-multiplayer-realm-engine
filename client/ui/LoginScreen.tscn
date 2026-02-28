@@ -1,0 +1,67 @@
+[gd_scene load_steps=2 format=3 uid="uid://btcfewas6f256"]
+
+[ext_resource type="Script" uid="uid://ck0f3bmpjx4ch" path="res://client/ui/LoginScreen.gd" id="1_parcy"]
+
+[node name="LoginScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_parcy")
+
+[node name="Panel" type="PanelContainer" parent="."]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -34.0
+offset_top = -66.0
+offset_right = 34.0
+offset_bottom = 66.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Realm Login Panel"
+
+[node name="ModeRow" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="ModeLabel" type="Label" parent="Panel/VBox/ModeRow"]
+layout_mode = 2
+text = "Mode"
+
+[node name="Mode" type="OptionButton" parent="Panel/VBox/ModeRow"]
+layout_mode = 2
+selected = 0
+item_count = 2
+popup/item_0/text = "Login"
+popup/item_0/id = 0
+popup/item_1/text = "Register"
+popup/item_1/id = 1
+
+[node name="Username" type="LineEdit" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Email" type="LineEdit" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Password" type="LineEdit" parent="Panel/VBox"]
+layout_mode = 2
+secret = true
+
+[node name="LoginButton" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "Login"
+
+[node name="Status" type="Label" parent="Panel/VBox"]
+layout_mode = 2

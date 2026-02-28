@@ -13,35 +13,31 @@ func _ready() -> void:
 	if mode.is_empty():
 		mode = _extract_arg(engine_args, "--mode=")
 	if mode.is_empty():
-		mode = "realm" # or client if you prefer
+		mode = "client"
 
-	ProcLog.init_from_args(mode) # default file: user://logs/realm.log, client.log, zone.log
+	ProcLog.init_from_args(mode)
 	ProcLog.lines(["[APP] engine_args: %s" % str(engine_args)])
 	ProcLog.lines(["[APP] user_args:   %s" % str(user_args)])
 	ProcLog.lines(["[APP] mode: %s" % mode])
 
 	match mode:
 		"realm":
-			add_child(realm_server_scene.instantiate())
+			_spawn_as_net(realm_server_scene)
 		"zone":
-			add_child(zone_server_scene.instantiate())
+			_spawn_as_net(zone_server_scene)
 		"client":
-			add_child(client_scene.instantiate())
+			_spawn_as_net(client_scene) # this should be LoginScreen OR ClientMain depending on your flow
 		_:
 			ProcLog.lines(["[APP] ERROR unknown mode=" + mode])
 			get_tree().quit()
+
+func _spawn_as_net(scene: PackedScene) -> void:
+	var n := scene.instantiate()
+	n.name = "Net"  # <-- CRITICAL: makes the RPC node path /root/Net
+	add_child(n)
 
 func _extract_arg(args: Array, prefix: String) -> String:
 	for a in args:
 		if typeof(a) == TYPE_STRING and a.begins_with(prefix):
 			return a.get_slice("=", 1)
 	return ""
-
-func _append_log(path: String, line: String) -> void:
-	if path.is_empty():
-		return
-	var f := FileAccess.open(path, FileAccess.READ_WRITE)
-	if f:
-		f.seek_end()
-		f.store_line(line)
-		f.close()

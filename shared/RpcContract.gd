@@ -80,3 +80,11 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_break_target(_target_id: int) -> void:
 	pass
+	
+@rpc("any_peer", "reliable")
+func c_authenticate(jwt: String) -> void:
+	pass
+	
+@rpc("authority", "reliable")
+func s_auth_ok(data: Dictionary) -> void:
+	pass

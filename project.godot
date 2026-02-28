@@ -18,3 +18,4 @@ config/icon="uid://cvyargsqlf6af"
 [autoload]
 
 ProcLog="*res://shared/ProcLog.gd"
+ClientSession="*res://client/ClientSession.gd"

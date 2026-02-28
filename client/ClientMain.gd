@@ -20,9 +20,37 @@ var combat_view: ClientCombatView
 var aim: ClientAim
 var input: ClientInput
 
+var jwt_token: String = "" # set this after HTTP login later
+var is_realm_authed: bool = false
+
+# auth
+var auth: ClientAuth
+var auth_account_id: int = 0
+var auth_username: String = ""
+
+var has_started: bool = false
+
+@export var login_screen_scene: PackedScene
+var login_ui: Control
+
+func begin_with_token(token: String, account_id: int, username: String) -> void:
+	if has_started:
+		return
+	has_started = true
+
+	jwt_token = token
+	auth_account_id = account_id
+	auth_username = username
+
+	ProcLog.lines(["[CLIENT] begin_with_token account=", account_id, " user=", username])
+
+	# Connect realm now that we have JWT
+	net.connect_realm(multiplayer)
+
 func _ready() -> void:
 	set_process_input(true)
 	ProcLog.lines(["[CLIENT] path: ", get_path()])
+	ProcLog.lines(["[CLIENT] rpc root name=", name, " path=", get_path()])
 
 	# build modules
 	net = ClientNet.new()
@@ -54,8 +82,32 @@ func _ready() -> void:
 	net.realm_connected.connect(_on_realm_connected)
 	net.zone_connected.connect(_on_zone_connected)
 
-	# connect realm (defaults inside net)
+	# Show login UI overlay
+	if login_screen_scene == null:
+		push_error("[CLIENT] login_screen_scene not assigned on ClientMain.tscn!")
+		return
+
+	login_ui = login_screen_scene.instantiate()
+	add_child(login_ui)
+
+	# IMPORTANT: LoginScreen must have signal login_success
+	login_ui.login_success.connect(func(token: String, account_id: int, username: String):
+		if is_instance_valid(login_ui):
+			login_ui.queue_free()
+		begin_with_token(token, account_id, username)
+	)
+
+func _on_login_ok(token: String, account_id: int, username: String) -> void:
+	jwt_token = token
+	auth_account_id = account_id
+	auth_username = username
+	ProcLog.lines(["[CLIENT] Login OK account=", account_id, " user=", username])
+
+	# Now connect to realm
 	net.connect_realm(multiplayer)
+
+func _on_login_failed(reason: String) -> void:
+	push_error("[CLIENT] Login FAILED: " + reason)
 
 func _input(event: InputEvent) -> void:
 	input.handle_input_event(event)
@@ -72,14 +124,27 @@ func _process(dt: float) -> void:
 		_send_move_intent_at_screen(input.get_hold_screen_pos())
 
 func _on_realm_connected() -> void:
-	ProcLog.lines(["[CLIENT] Sending c_request_enter_hub to server..."])
-	rpc_id(1, "c_request_enter_hub", current_character_id)
+	is_realm_authed = false
+
+	if jwt_token == "":
+		push_error("[CLIENT] No jwt_token set; cannot authenticate with Realm.")
+		return
+
+	ProcLog.lines(["[CLIENT] Sending c_authenticate to Realm..."])
+	rpc_id(1, "c_authenticate", jwt_token)
 
 func _on_zone_connected() -> void:
 	ProcLog.lines(["[CLIENT] Connected to Zone. Joining instance..."])
 	rpc_id(1, "c_join_instance", current_join_ticket, current_character_id)
 
 # ---------------- RPCs (stay here for checksum safety) ----------------
+
+@rpc("authority", "reliable")
+func s_auth_ok(data: Dictionary) -> void:
+	is_realm_authed = true
+	ProcLog.lines(["[CLIENT] Realm auth ok: ", data])
+	ProcLog.lines(["[CLIENT] Sending c_request_enter_hub to server..."])
+	rpc_id(1, "c_request_enter_hub", current_character_id)
 
 @rpc("authority", "reliable")
 func s_travel_to_zone(travel: Dictionary) -> void:
