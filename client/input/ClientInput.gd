@@ -49,3 +49,7 @@ func get_hold_screen_pos() -> Vector2:
 
 func is_holding_move() -> bool:
 	return is_move_hold
+	
+func cancel_holding_move() -> void:
+	# set your internal flag false (rename as needed)
+	is_move_hold = false

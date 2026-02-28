@@ -2,7 +2,11 @@
 extends Node
 class_name RpcContract
 
-# ---------------- Realm -> Client (travel) ----------------
+# ---------------- Realm -> Client (auth/travel/lobby) ----------------
+
+@rpc("authority", "reliable")
+func s_auth_ok(_data: Dictionary) -> void:
+	pass
 
 @rpc("authority", "reliable")
 func s_travel_to_zone(_travel: Dictionary) -> void:
@@ -12,11 +16,46 @@ func s_travel_to_zone(_travel: Dictionary) -> void:
 func s_travel_failed(_reason: String) -> void:
 	pass
 
-# ---------------- Client -> Realm / Zone (requests) ----------------
+# Lobby list + create failures
+@rpc("authority", "reliable")
+func s_zone_list(_zones: Array) -> void:
+	pass
 
+@rpc("authority", "reliable")
+func s_create_zone_failed(_reason: String) -> void:
+	pass
+
+
+# ---------------- Client -> Realm (requests) ----------------
+
+@rpc("any_peer", "reliable")
+func c_authenticate(_jwt: String) -> void:
+	pass
+
+# Old flow (still supported)
 @rpc("any_peer", "reliable")
 func c_request_enter_hub(_character_id: int) -> void:
 	pass
+
+# New lobby flow
+@rpc("any_peer", "reliable")
+func c_request_zone_list() -> void:
+	pass
+
+@rpc("any_peer", "reliable")
+func c_request_create_zone(_map_id: String, _seed: int, _capacity: int) -> void:
+	pass
+
+@rpc("any_peer", "reliable")
+func c_request_enter_instance(_instance_id: int, _character_id: int) -> void:
+	pass
+	
+@rpc("any_peer", "reliable")
+func c_leave_zone() -> void:
+	pass
+
+
+# ---------------- Client -> Zone (requests) ----------------
 
 @rpc("any_peer", "reliable")
 func c_join_instance(_join_ticket: String, _character_id: int) -> void:
@@ -25,13 +64,13 @@ func c_join_instance(_join_ticket: String, _character_id: int) -> void:
 @rpc("any_peer", "unreliable")
 func c_set_move_target(_world_pos: Vector3) -> void:
 	pass
-	
-# Client -> Zone
+
 @rpc("any_peer", "reliable")
 func c_fire_projectile(_from: Vector3, _dir: Vector3) -> void:
 	pass
 
-# ---------------- Zone -> Client (join/spawn/snapshots) ----------------
+
+# ---------------- Zone -> Client (join/spawn/snapshots/combat) ----------------
 
 @rpc("authority", "reliable")
 func s_join_accepted(_data: Dictionary) -> void:
@@ -79,12 +118,4 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 
 @rpc("authority", "reliable")
 func s_break_target(_target_id: int) -> void:
-	pass
-	
-@rpc("any_peer", "reliable")
-func c_authenticate(jwt: String) -> void:
-	pass
-	
-@rpc("authority", "reliable")
-func s_auth_ok(data: Dictionary) -> void:
 	pass

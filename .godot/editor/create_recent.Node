@@ -1,7 +1,8 @@
+Button
+ItemList
 OptionButton
 Label
 HBoxContainer
-Button
 LineEdit
 VBoxContainer
 PanelContainer
@@ -11,5 +12,3 @@ MultiplayerSynchronizer
 Camera3D
 MultiplayerSpawner
 Node3D
-CanvasLayer
-Node

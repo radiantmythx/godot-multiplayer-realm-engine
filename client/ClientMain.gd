@@ -30,8 +30,19 @@ var auth_username: String = ""
 
 var has_started: bool = false
 
+enum ConnKind { NONE, REALM, ZONE }
+var conn_kind: ConnKind = ConnKind.NONE
+
 @export var login_screen_scene: PackedScene
 var login_ui: Control
+
+# lobby state
+var last_zone_list: Array = []
+
+# ---- Zone watchdog ----
+var last_zone_packet_ms: int = 0
+var zone_watchdog: Timer
+const ZONE_TIMEOUT_MS := 2500
 
 func begin_with_token(token: String, account_id: int, username: String) -> void:
 	if has_started:
@@ -82,48 +93,101 @@ func _ready() -> void:
 	net.realm_connected.connect(_on_realm_connected)
 	net.zone_connected.connect(_on_zone_connected)
 
+	# these fire on failed connect or disconnect after connected
+	net.zone_disconnected.connect(func(): _on_zone_lost("server_disconnected"))
+	net.zone_connection_failed.connect(func(): _on_zone_lost("connection_failed"))
+
+	# Optional: realm disconnect handling (usually you'd just show an error)
+	net.realm_disconnected.connect(func(): _on_realm_lost("realm_disconnected"))
+	net.realm_connection_failed.connect(func(): _on_realm_lost("realm_connection_failed"))
+
+	# watchdog timer (always running)
+	zone_watchdog = Timer.new()
+	zone_watchdog.wait_time = 0.25
+	zone_watchdog.one_shot = false
+	zone_watchdog.timeout.connect(_zone_watchdog_tick)
+	add_child(zone_watchdog)
+	zone_watchdog.start()
+
 	# Show login UI overlay
 	if login_screen_scene == null:
 		push_error("[CLIENT] login_screen_scene not assigned on ClientMain.tscn!")
 		return
 
+	add_to_group("client_main")
+
 	login_ui = login_screen_scene.instantiate()
 	add_child(login_ui)
 
-	# IMPORTANT: LoginScreen must have signal login_success
+	# LoginScreen must have signal login_success(token, account_id, username)
 	login_ui.login_success.connect(func(token: String, account_id: int, username: String):
-		if is_instance_valid(login_ui):
-			login_ui.queue_free()
 		begin_with_token(token, account_id, username)
+
+		if login_ui.has_method("set_authed"):
+			login_ui.call("set_authed", true, account_id, username)
 	)
 
-func _on_login_ok(token: String, account_id: int, username: String) -> void:
-	jwt_token = token
-	auth_account_id = account_id
-	auth_username = username
-	ProcLog.lines(["[CLIENT] Login OK account=", account_id, " user=", username])
+# ---------------- Connection helpers ----------------
 
-	# Now connect to realm
-	net.connect_realm(multiplayer)
+func _peer_connected() -> bool:
+	if multiplayer.multiplayer_peer == null:
+		return false
+	var p := multiplayer.multiplayer_peer
+	if p is ENetMultiplayerPeer:
+		return p.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+	return true
 
-func _on_login_failed(reason: String) -> void:
-	push_error("[CLIENT] Login FAILED: " + reason)
+func _mark_zone_packet() -> void:
+	last_zone_packet_ms = Time.get_ticks_msec()
+
+func _zone_watchdog_tick() -> void:
+	if conn_kind != ConnKind.ZONE:
+		return
+
+	# If ENet says we're not connected, bail immediately
+	if not _peer_connected():
+		_on_zone_lost("peer_not_connected")
+		return
+
+	# If we haven't received packets recently, assume zone died/hung
+	var now := Time.get_ticks_msec()
+	if last_zone_packet_ms > 0 and (now - last_zone_packet_ms) > ZONE_TIMEOUT_MS:
+		_on_zone_lost("snapshot_timeout")
+
+# ---------------- Input / tick ----------------
 
 func _input(event: InputEvent) -> void:
+	# allow ESC always
+	if event.is_action_pressed("ui_cancel"):
+		back_to_lobby()
+		return
+
+	# Ignore gameplay input unless in zone and connected
+	if conn_kind != ConnKind.ZONE:
+		return
+	if not _peer_connected():
+		return
+
 	input.handle_input_event(event)
 
-	# right-click fire is emitted as screen_pos
-	# (we don't subscribe to signal to keep wiring minimal; we handle it inline)
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		_try_fire_at_screen(event.position)
 
 func _process(dt: float) -> void:
-	# hold-to-move tick
+	# only run gameplay loop when actually in-zone and connected
+	if conn_kind != ConnKind.ZONE:
+		return
+	if not _peer_connected():
+		return
+
 	input.tick(dt)
 	if input.is_holding_move():
 		_send_move_intent_at_screen(input.get_hold_screen_pos())
 
+# ---------------- Net callbacks ----------------
+
 func _on_realm_connected() -> void:
+	conn_kind = ConnKind.REALM
 	is_realm_authed = false
 
 	if jwt_token == "":
@@ -134,8 +198,104 @@ func _on_realm_connected() -> void:
 	rpc_id(1, "c_authenticate", jwt_token)
 
 func _on_zone_connected() -> void:
+	conn_kind = ConnKind.ZONE
+	_mark_zone_packet()
+
 	ProcLog.lines(["[CLIENT] Connected to Zone. Joining instance..."])
-	rpc_id(1, "c_join_instance", current_join_ticket, current_character_id)
+	if _peer_connected():
+		rpc_id(1, "c_join_instance", current_join_ticket, current_character_id)
+
+func _on_realm_lost(reason: String) -> void:
+	# if realm drops while in lobby, just show message
+	if conn_kind == ConnKind.REALM:
+		conn_kind = ConnKind.NONE
+		if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
+			login_ui.call("set_status", "Realm connection lost: " + reason)
+
+func _on_zone_lost(reason: String) -> void:
+	if conn_kind != ConnKind.ZONE:
+		return
+
+	ProcLog.lines(["[CLIENT] Zone lost (", reason, ") -> back to lobby"])
+
+	# HARD STOP gameplay immediately so we don't spam RPCs
+	conn_kind = ConnKind.NONE
+	local_peer_id = 0
+
+	# cancel hold-to-move if you implement it
+	if input and input.has_method("cancel_holding_move"):
+		input.call("cancel_holding_move")
+
+	back_to_lobby()
+
+	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
+		login_ui.call("set_status", "Zone disconnected (" + reason + "). Back in lobby.")
+
+# ---------------- Lobby helper methods (called by LoginScreen/Lobby UI) ----------------
+
+func request_zone_list() -> void:
+	if conn_kind != ConnKind.REALM:
+		return
+	if not _peer_connected():
+		return
+	rpc_id(1, "c_request_zone_list")
+
+func request_create_zone(map_id: String, seed: int, capacity: int) -> void:
+	if conn_kind != ConnKind.REALM:
+		return
+	if not _peer_connected():
+		return
+	rpc_id(1, "c_request_create_zone", map_id, seed, capacity)
+
+func request_join_instance(instance_id: int, character_id: int) -> void:
+	if conn_kind != ConnKind.REALM:
+		return
+	if not _peer_connected():
+		return
+	current_character_id = character_id
+	rpc_id(1, "c_request_enter_instance", instance_id, character_id)
+
+func back_to_lobby() -> void:
+	ProcLog.lines(["[CLIENT] Back to lobby requested"])
+
+	# If already in lobby/realm, just show UI + refresh
+	if conn_kind == ConnKind.REALM:
+		if is_instance_valid(login_ui):
+			login_ui.visible = true
+			if login_ui.has_method("set_status"):
+				login_ui.call("set_status", "Back in lobby. Choose a zone.")
+		request_zone_list()
+		return
+
+	# Best-effort tell the ZONE you’re leaving (only if still connected)
+	if conn_kind == ConnKind.ZONE and _peer_connected():
+		rpc_id(1, "c_leave_zone")
+
+	# Clear world visuals/state
+	local_peer_id = 0
+	current_join_ticket = ""
+	current_zone_host = ""
+	current_zone_port = 0
+	last_zone_packet_ms = 0
+
+	players_view.clear()
+	combat_view.clear()
+
+	if world and world.has_method("unload_world"):
+		world.call("unload_world")
+
+	# Disconnect whatever is current (zone or half-dead)
+	net.disconnect_current(multiplayer)
+
+	# Reconnect to realm
+	net.set_realm("127.0.0.1", 1909)
+	net.connect_realm(multiplayer)
+
+	# Show lobby UI again immediately (list will populate after s_auth_ok)
+	if is_instance_valid(login_ui):
+		login_ui.visible = true
+		if login_ui.has_method("set_status"):
+			login_ui.call("set_status", "Connecting to Realm...")
 
 # ---------------- RPCs (stay here for checksum safety) ----------------
 
@@ -143,8 +303,24 @@ func _on_zone_connected() -> void:
 func s_auth_ok(data: Dictionary) -> void:
 	is_realm_authed = true
 	ProcLog.lines(["[CLIENT] Realm auth ok: ", data])
-	ProcLog.lines(["[CLIENT] Sending c_request_enter_hub to server..."])
-	rpc_id(1, "c_request_enter_hub", current_character_id)
+
+	ProcLog.lines(["[CLIENT] Requesting zone list..."])
+	if conn_kind == ConnKind.REALM and _peer_connected():
+		rpc_id(1, "c_request_zone_list")
+
+@rpc("authority", "reliable")
+func s_zone_list(zones: Array) -> void:
+	last_zone_list = zones
+	ProcLog.lines(["[CLIENT] zone_list count=", zones.size()])
+
+	if is_instance_valid(login_ui) and login_ui.has_method("set_zone_list"):
+		login_ui.call("set_zone_list", zones)
+
+@rpc("authority", "reliable")
+func s_create_zone_failed(reason: String) -> void:
+	push_error("[CLIENT] Create zone failed: " + reason)
+	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
+		login_ui.call("set_status", "Create failed: " + reason)
 
 @rpc("authority", "reliable")
 func s_travel_to_zone(travel: Dictionary) -> void:
@@ -153,8 +329,8 @@ func s_travel_to_zone(travel: Dictionary) -> void:
 	current_zone_host = travel.host
 	current_zone_port = int(travel.port)
 	current_join_ticket = travel.join_ticket
+	last_zone_packet_ms = 0
 
-	# reset per-world visuals
 	players_view.clear()
 	combat_view.clear()
 
@@ -166,8 +342,10 @@ func s_travel_to_zone(travel: Dictionary) -> void:
 	net.connect_zone(multiplayer)
 
 @rpc("authority", "reliable")
-func s_travel_failed(_reason: String) -> void:
-	pass
+func s_travel_failed(reason: String) -> void:
+	push_error("[CLIENT] Travel failed: " + reason)
+	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
+		login_ui.call("set_status", "Join failed: " + reason)
 
 @rpc("authority", "reliable")
 func s_join_accepted(_data: Dictionary) -> void:
@@ -175,6 +353,10 @@ func s_join_accepted(_data: Dictionary) -> void:
 	local_peer_id = int(_data.get("you_peer_id", 0))
 	players_view.set_local_peer_id(local_peer_id)
 	players_view.try_activate_local_camera(self, world)
+
+	# optional: hide lobby UI now that we're in-game
+	if is_instance_valid(login_ui):
+		login_ui.visible = false
 
 @rpc("authority", "reliable")
 func s_join_rejected(reason: String) -> void:
@@ -194,6 +376,7 @@ func s_despawn_player(peer_id: int) -> void:
 
 @rpc("authority", "unreliable")
 func s_apply_snapshots(snaps: Array) -> void:
+	_mark_zone_packet()
 	players_view.apply_snapshots(snaps)
 
 # ---- projectiles ----
@@ -204,6 +387,7 @@ func s_spawn_projectile(proj_id: int, _owner_peer: int, xform: Transform3D, _vel
 
 @rpc("authority", "unreliable")
 func s_projectile_snapshots(snaps: Array) -> void:
+	_mark_zone_packet()
 	combat_view.projectile_snapshots(snaps)
 
 @rpc("authority", "reliable")
@@ -227,7 +411,9 @@ func s_break_target(target_id: int) -> void:
 # ---------------- client -> server intents ----------------
 
 func send_move_target(world_pos: Vector3) -> void:
-	if multiplayer.multiplayer_peer == null:
+	if conn_kind != ConnKind.ZONE:
+		return
+	if not _peer_connected():
 		return
 	rpc_id(1, "c_set_move_target", world_pos)
 
@@ -241,6 +427,11 @@ func _send_move_intent_at_screen(screen_pos: Vector2) -> void:
 		send_move_target(hit.position)
 
 func _try_fire_at_screen(screen_pos: Vector2) -> void:
+	if conn_kind != ConnKind.ZONE:
+		return
+	if not _peer_connected():
+		return
+
 	var cam := players_view.get_local_camera()
 	if cam == null:
 		return

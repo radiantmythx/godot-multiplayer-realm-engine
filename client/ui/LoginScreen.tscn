@@ -63,5 +63,22 @@ secret = true
 layout_mode = 2
 text = "Login"
 
+[node name="ZonesList" type="ItemList" parent="Panel/VBox"]
+layout_mode = 2
+auto_width = true
+auto_height = true
+
+[node name="RefreshZonesButton" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "Refresh Zones"
+
+[node name="JoinZoneButton" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "Join Zone"
+
+[node name="CreateZoneButton" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "Create Zone"
+
 [node name="Status" type="Label" parent="Panel/VBox"]
 layout_mode = 2

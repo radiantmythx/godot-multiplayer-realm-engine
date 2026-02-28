@@ -221,6 +221,17 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 
 	for tinfo in targets.get_target_snapshot_list():
 		rpc_id(peer_id, "s_spawn_target", int(tinfo.id), tinfo.xform, int(tinfo.hp))
+		
+@rpc("any_peer", "reliable")
+func c_leave_zone() -> void:
+	var peer_id := multiplayer.get_remote_sender_id()
+	_log("[ZONE] leave requested by peer %d" % peer_id)
+
+	players.remove_peer(peer_id)
+	for pid in multiplayer.get_peers():
+		rpc_id(pid, "s_despawn_player", peer_id)
+
+	multiplayer.disconnect_peer(peer_id)
 
 # ---------------- Movement ----------------
 

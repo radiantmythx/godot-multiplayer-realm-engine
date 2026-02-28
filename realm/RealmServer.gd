@@ -330,6 +330,112 @@ func c_authenticate(jwt: String) -> void:
 
 	# optional ack to client
 	rpc_id(peer_id, "s_auth_ok", { "account_id": account_id, "username": uname })
+	
+	
+	
+@rpc("any_peer", "reliable")
+func c_request_zone_list() -> void:
+	var peer_id := multiplayer.get_remote_sender_id()
+
+	# You can allow unauth listing, or require auth. I'll allow it:
+	var zones: Array = []
+	for k in instances.keys():
+		var inst = instances[k]
+		# only show running or starting zones
+		if inst.status != "RUNNING" and inst.status != "STARTING":
+			continue
+		zones.append({
+			"key": str(inst.key),
+			"instance_id": int(inst.instance_id),
+			"kind": str(inst.kind),
+			"map_id": str(inst.map_id),
+			"seed": int(inst.seed),
+			"port": int(inst.port),
+			"status": str(inst.status),
+			"capacity": int(inst.capacity),
+			"player_count": int(inst.player_count),
+		})
+
+	rpc_id(peer_id, "s_zone_list", zones)
+
+
+@rpc("authority", "reliable")
+func s_zone_list(_zones: Array) -> void:
+	pass
+
+
+@rpc("any_peer", "reliable")
+func c_request_create_zone(map_id: String, seed: int, capacity: int) -> void:
+	var peer_id := multiplayer.get_remote_sender_id()
+
+	if auth_sessions.has(peer_id) == false:
+		rpc_id(peer_id, "s_create_zone_failed", "unauthenticated")
+		return
+
+	# For now, create a unique key each time
+	var key := "user:%d:%d" % [peer_id, Time.get_ticks_msec()]
+	var inst = _create_instance(key, "ZONE", map_id, seed, capacity)
+	if inst == null:
+		rpc_id(peer_id, "s_create_zone_failed", "no_capacity")
+		return
+
+	# return the updated list (or just ack)
+	c_request_zone_list()
+
+@rpc("any_peer", "reliable")
+func c_request_enter_instance(instance_id: int, character_id: int) -> void:
+	var client_peer_id := multiplayer.get_remote_sender_id()
+
+	if auth_sessions.has(client_peer_id) == false:
+		rpc_id(client_peer_id, "s_travel_failed", "unauthenticated")
+		return
+
+	# find instance by id
+	var inst: Variant = null
+	for k in instances.keys():
+		if int(instances[k].instance_id) == instance_id:
+			inst = instances[k]
+			break
+
+	if inst == null:
+		rpc_id(client_peer_id, "s_travel_failed", "instance_not_found")
+		return
+
+	if str(inst.status) != "RUNNING" and str(inst.status) != "STARTING":
+		rpc_id(client_peer_id, "s_travel_failed", "instance_not_ready")
+		return
+
+	if int(inst.player_count) >= int(inst.capacity):
+		rpc_id(client_peer_id, "s_travel_failed", "instance_full")
+		return
+
+	# issue ticket (same as hub)
+	var now := int(Time.get_unix_time_from_system())
+	var auth = auth_sessions[client_peer_id]
+	var payload := {
+		"instance_id": int(inst.instance_id),
+		"character_id": character_id,
+		"account_id": int(auth.account_id),
+		"session_id": str(client_peer_id),
+		"iat": now,
+		"exp": now + 20,
+		"nonce": randi()
+	}
+	var token := Ticket.issue(ticket_secret, payload)
+
+	rpc_id(client_peer_id, "s_travel_to_zone", {
+		"host": "127.0.0.1",
+		"port": int(inst.port),
+		"instance_id": int(inst.instance_id),
+		"map_id": str(inst.map_id),
+		"seed": int(inst.seed),
+		"join_ticket": token
+	})
+
+
+@rpc("authority", "reliable")
+func s_create_zone_failed(_reason: String) -> void:
+	pass
 
 @rpc("authority", "reliable")
 func s_join_accepted(_data: Dictionary) -> void:
