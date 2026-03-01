@@ -29,18 +29,24 @@ grow_vertical = 2
 [node name="VBox" type="VBoxContainer" parent="Panel"]
 layout_mode = 2
 
-[node name="Title" type="Label" parent="Panel/VBox"]
+[node name="TitleContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Panel/VBox/TitleContainer"]
 layout_mode = 2
 text = "Realm Login Panel"
 
-[node name="ModeRow" type="HBoxContainer" parent="Panel/VBox"]
+[node name="UserLoginContainer" type="VBoxContainer" parent="Panel/VBox"]
 layout_mode = 2
 
-[node name="ModeLabel" type="Label" parent="Panel/VBox/ModeRow"]
+[node name="ModeRow" type="HBoxContainer" parent="Panel/VBox/UserLoginContainer"]
+layout_mode = 2
+
+[node name="ModeLabel" type="Label" parent="Panel/VBox/UserLoginContainer/ModeRow"]
 layout_mode = 2
 text = "Mode"
 
-[node name="Mode" type="OptionButton" parent="Panel/VBox/ModeRow"]
+[node name="Mode" type="OptionButton" parent="Panel/VBox/UserLoginContainer/ModeRow"]
 layout_mode = 2
 selected = 0
 item_count = 2
@@ -49,36 +55,76 @@ popup/item_0/id = 0
 popup/item_1/text = "Register"
 popup/item_1/id = 1
 
-[node name="Username" type="LineEdit" parent="Panel/VBox"]
+[node name="Username" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 
-[node name="Email" type="LineEdit" parent="Panel/VBox"]
+[node name="Email" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 
-[node name="Password" type="LineEdit" parent="Panel/VBox"]
+[node name="Password" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 secret = true
 
-[node name="LoginButton" type="Button" parent="Panel/VBox"]
+[node name="LoginButton" type="Button" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 text = "Login"
 
-[node name="ZonesList" type="ItemList" parent="Panel/VBox"]
+[node name="LogoutContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="LogoutButton" type="Button" parent="Panel/VBox/LogoutContainer"]
+layout_mode = 2
+text = "Logout"
+
+[node name="CharactersContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="CharLabel" type="Label" parent="Panel/VBox/CharactersContainer"]
+layout_mode = 2
+text = "Characters:"
+
+[node name="CharactersList" type="ItemList" parent="Panel/VBox/CharactersContainer"]
 layout_mode = 2
 auto_width = true
 auto_height = true
 
-[node name="RefreshZonesButton" type="Button" parent="Panel/VBox"]
+[node name="CharacterName" type="LineEdit" parent="Panel/VBox/CharactersContainer"]
+layout_mode = 2
+
+[node name="CreateCharacterButton" type="Button" parent="Panel/VBox/CharactersContainer"]
+layout_mode = 2
+text = "Create Character"
+
+[node name="DeleteCharacterButton" type="Button" parent="Panel/VBox/CharactersContainer"]
+layout_mode = 2
+text = "Delete Character"
+
+[node name="ZonesContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="ZoneLabel" type="Label" parent="Panel/VBox/ZonesContainer"]
+layout_mode = 2
+text = "Zones:"
+
+[node name="ZonesList" type="ItemList" parent="Panel/VBox/ZonesContainer"]
+layout_mode = 2
+auto_width = true
+auto_height = true
+
+[node name="RefreshZonesButton" type="Button" parent="Panel/VBox/ZonesContainer"]
 layout_mode = 2
 text = "Refresh Zones"
 
-[node name="JoinZoneButton" type="Button" parent="Panel/VBox"]
+[node name="JoinZoneButton" type="Button" parent="Panel/VBox/ZonesContainer"]
 layout_mode = 2
 text = "Join Zone"
 
-[node name="CreateZoneButton" type="Button" parent="Panel/VBox"]
+[node name="CreateZoneButton" type="Button" parent="Panel/VBox/ZonesContainer"]
 layout_mode = 2
 text = "Create Zone"
 
-[node name="Status" type="Label" parent="Panel/VBox"]
+[node name="StatusContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Status" type="Label" parent="Panel/VBox/StatusContainer"]
 layout_mode = 2

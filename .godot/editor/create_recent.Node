@@ -1,10 +1,10 @@
-Button
+VBoxContainer
 ItemList
-OptionButton
 Label
+Button
+OptionButton
 HBoxContainer
 LineEdit
-VBoxContainer
 PanelContainer
 Panel
 MeshInstance3D

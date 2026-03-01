@@ -14,3 +14,5 @@ res://shared/RpcContract.gd
 res://zone/ZoneServer.gd
 res://client/net/ClientNet.gd
 res://client/input/ClientInput.gd
+res://client/chars/ClientCharacters.gd
+res://client/ui/LoginScreen.gd
