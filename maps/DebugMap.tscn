@@ -1,4 +1,18 @@
-[gd_scene load_steps=4 format=3 uid="uid://1k5rcw2h6ojf"]
+[gd_scene load_steps=7 format=3 uid="uid://1k5rcw2h6ojf"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ku4gy"]
+sky_top_color = Color(0.24929, 0.566501, 0.839717, 1)
+sky_horizon_color = Color(0.688748, 0.760301, 0.819605, 1)
+ground_horizon_color = Color(0.688748, 0.760301, 0.819605, 1)
+
+[sub_resource type="Sky" id="Sky_a5lnr"]
+sky_material = SubResource("ProceduralSkyMaterial_ku4gy")
+
+[sub_resource type="Environment" id="Environment_llhh6"]
+background_mode = 2
+sky = SubResource("Sky_a5lnr")
+tonemap_mode = 2
+glow_enabled = true
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_6rxlf"]
 size = Vector3(25, 0.1, 25)
@@ -11,8 +25,13 @@ albedo_color = Color(0.405331, 0.652788, 0.31519, 1)
 
 [node name="DebugMap" type="Node3D"]
 
-[node name="Spawn" type="Marker3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.988756, -0.0341465, 0.145584, 0, 0.973579, 0.228351, -0.149535, 0.225783, -0.962632, 0, 0, 0)
+light_color = Color(0.85098, 0.576471, 0.458824, 1)
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_llhh6")
 
 [node name="WorldGeometry" type="Node3D" parent="."]
 
@@ -24,3 +43,22 @@ shape = SubResource("BoxShape3D_6rxlf")
 [node name="MeshInstance3D" type="MeshInstance3D" parent="WorldGeometry/StaticBody3D"]
 mesh = SubResource("PlaneMesh_v8lq1")
 surface_material_override/0 = SubResource("StandardMaterial3D_ku4gy")
+
+[node name="SpawnPoints" type="Node3D" parent="."]
+
+[node name="Spawn_0" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.37048, 0, 0)
+
+[node name="Spawn_1" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.18649, 0, 0)
+
+[node name="Spawn_2" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, 0)
+
+[node name="Spawn_3" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, 2.10268)
+
+[node name="Spawn_4" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, -1.97344)
+
+[node name="Players" type="Node3D" parent="."]

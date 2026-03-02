@@ -123,6 +123,18 @@ text = "Join Zone"
 layout_mode = 2
 text = "Create Zone"
 
+[node name="MapsContainer" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="MapsLabel" type="Label" parent="Panel/VBox/MapsContainer"]
+layout_mode = 2
+text = "Maps:"
+
+[node name="MapsList" type="ItemList" parent="Panel/VBox/MapsContainer"]
+layout_mode = 2
+auto_width = true
+auto_height = true
+
 [node name="StatusContainer" type="VBoxContainer" parent="Panel/VBox"]
 layout_mode = 2
 
