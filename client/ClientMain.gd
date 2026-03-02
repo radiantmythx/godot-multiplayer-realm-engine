@@ -247,13 +247,20 @@ func request_create_zone(map_id: String, seed: int, capacity: int) -> void:
 		return
 	rpc_id(1, "c_request_create_zone", map_id, seed, capacity)
 
-func request_join_instance(instance_id: int, character_id: int) -> void:
+# UPDATED: accept character_name and forward to Realm so it can embed in ticket payload.
+func request_join_instance(instance_id: int, character_id: int, character_name: String) -> void:
 	if conn_kind != ConnKind.REALM:
 		return
 	if not _peer_connected():
 		return
+
 	current_character_id = character_id
-	rpc_id(1, "c_request_enter_instance", instance_id, character_id)
+
+	var safe_name := (character_name if character_name != null else "").strip_edges()
+	if safe_name.is_empty():
+		safe_name = "Player"
+
+	rpc_id(1, "c_request_enter_instance", instance_id, character_id, safe_name)
 
 func back_to_lobby() -> void:
 	ProcLog.lines(["[CLIENT] Back to lobby requested"])
@@ -367,8 +374,8 @@ func s_spawn_players_bulk(list: Array) -> void:
 	players_view.spawn_players_bulk(self, world, list)
 
 @rpc("authority", "reliable")
-func s_spawn_player(peer_id: int, character_id: int, xform: Transform3D) -> void:
-	players_view.spawn_player(self, world, peer_id, character_id, xform)
+func s_spawn_player(peer_id: int, character_id: int, name: String, xform: Transform3D) -> void:
+	players_view.spawn_player(self, world, peer_id, character_id, name, xform)
 
 @rpc("authority", "reliable")
 func s_despawn_player(peer_id: int) -> void:

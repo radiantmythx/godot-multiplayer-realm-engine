@@ -40,10 +40,11 @@ func spawn_players_bulk(owner: Node, world: ClientWorld, list: Array) -> void:
 		var cid := int(d.get("character_id", 0))
 		var xform: Transform3D = d.get("xform", Transform3D.IDENTITY)
 		var yaw: float = float(d.get("yaw", 0.0))
-		_spawn_or_update(owner, world, pid, cid, xform, yaw)
+		var pname := str(d.get("name", ""))
+		_spawn_or_update(owner, world, pid, cid, pname, xform, yaw)
 
-func spawn_player(owner: Node, world: ClientWorld, peer_id: int, character_id: int, xform: Transform3D) -> void:
-	_spawn_or_update(owner, world, peer_id, character_id, xform, 0.0)
+func spawn_player(owner: Node, world: ClientWorld, peer_id: int, character_id: int, name: String, xform: Transform3D) -> void:
+	_spawn_or_update(owner, world, peer_id, character_id, name, xform, 0.0)
 
 func despawn_player(owner: Node, world: ClientWorld, peer_id: int) -> void:
 	var key := str(peer_id)
@@ -87,7 +88,7 @@ func try_activate_local_camera(owner: Node, world: ClientWorld) -> void:
 
 # --- internals ---
 
-func _spawn_or_update(owner: Node, world: ClientWorld, peer_id: int, character_id: int, xform: Transform3D, yaw: float) -> void:
+func _spawn_or_update(owner: Node, world: ClientWorld, peer_id: int, character_id: int, name: String, xform: Transform3D, yaw: float) -> void:
 	var players := world.get_players_root(owner)
 	if players == null:
 		push_error("[CLIENT] World/Players missing; can't spawn")
@@ -122,6 +123,8 @@ func _spawn_or_update(owner: Node, world: ClientWorld, peer_id: int, character_i
 			n.call("set_body_yaw", yaw)
 		if _inst_has_method(n, "server_init") and character_id != 0:
 			n.call("server_init", character_id)
+		if not name.is_empty() and n.has_method("set_player_name"):
+			n.call("set_player_name", name)
 
 func _apply_state(peer_id: int, xform: Transform3D, yaw: float) -> void:
 	var key := str(peer_id)

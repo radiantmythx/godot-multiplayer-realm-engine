@@ -196,9 +196,11 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 		rpc_id(peer_id, "s_join_rejected", "wrong_character")
 		multiplayer.disconnect_peer(peer_id)
 		return
-
+	var character_name := str(payload.get("character_name", ""))
+	if character_name.is_empty():
+		character_name = "Player"
 	var spawn_xform := world.get_next_spawn_transform()
-	players.add_peer(peer_id, character_id, spawn_xform)
+	players.add_peer(peer_id, character_id, character_name, spawn_xform)
 
 	rpc_id(peer_id, "s_join_accepted", {
 		"instance_id": instance_id,
@@ -210,7 +212,7 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 	for pid2 in multiplayer.get_peers():
 		if pid2 == peer_id:
 			continue
-		rpc_id(pid2, "s_spawn_player", peer_id, character_id, spawn_xform)
+		rpc_id(pid2, "s_spawn_player", peer_id, character_id, character_name, spawn_xform)
 
 	if not spawned_test_targets:
 		spawned_test_targets = true

@@ -1,3 +1,4 @@
+# res://ui/LoginScreen.gd
 extends Control
 
 signal login_success(token: String, account_id: int, username: String)
@@ -50,6 +51,7 @@ var _refresh_timer: Timer
 var _zones: Array = []        # last zone list from realm
 var _characters: Array = []   # last character list from API
 var _selected_character_id: int = 0
+var _selected_character_name: String = "" # NEW
 
 func _ready() -> void:
 	status_lbl.text = ""
@@ -174,6 +176,7 @@ func _on_auth_ok(token: String, account_id: int, username: String) -> void:
 	status_lbl.text = "Logged in. Loading characters..."
 
 	_selected_character_id = 0
+	_selected_character_name = "" # NEW
 	_characters.clear()
 	chars_list.clear()
 	_zones.clear()
@@ -208,6 +211,7 @@ func _logout() -> void:
 	_account_id = 0
 	_username = ""
 	_selected_character_id = 0
+	_selected_character_name = "" # NEW
 
 	_characters.clear()
 	chars_list.clear()
@@ -344,7 +348,7 @@ func _join_selected_zone() -> void:
 
 	var cm := _get_client_main()
 	if cm and cm.has_method("request_join_instance"):
-		cm.call("request_join_instance", instance_id, _selected_character_id)
+		cm.call("request_join_instance", instance_id, _selected_character_id, _selected_character_name) # NEW
 
 func _create_zone() -> void:
 	if not _is_authed:
@@ -372,6 +376,7 @@ func _on_chars_list_ok(list: Array) -> void:
 	_render_characters()
 
 	_selected_character_id = 0
+	_selected_character_name = "" # NEW
 	zones_list.deselect_all()
 	status_lbl.text = "Select a character."
 	_sync_gate_visibility_and_enabled()
@@ -381,6 +386,7 @@ func _on_chars_create_ok(_character: Dictionary) -> void:
 
 func _on_chars_delete_ok(_character_id: int) -> void:
 	_selected_character_id = 0
+	_selected_character_name = "" # NEW
 	zones_list.deselect_all()
 	chars_api.list_characters(_token)
 	_sync_gate_visibility_and_enabled()
@@ -406,9 +412,11 @@ func _on_character_selected() -> void:
 	var sel := chars_list.get_selected_items()
 	if sel.is_empty():
 		_selected_character_id = 0
+		_selected_character_name = "" # NEW
 	else:
 		var ch = _characters[int(sel[0])]
 		_selected_character_id = int(ch.get("id", 0))
+		_selected_character_name = str(ch.get("name", "")) # NEW
 		zones_list.deselect_all()
 
 	_sync_gate_visibility_and_enabled()

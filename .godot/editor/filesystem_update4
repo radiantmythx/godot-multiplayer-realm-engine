@@ -16,3 +16,7 @@ res://client/net/ClientNet.gd
 res://client/input/ClientInput.gd
 res://client/chars/ClientCharacters.gd
 res://client/ui/LoginScreen.gd
+res://zone/ZonePlayers.gd
+res://client/view/ClientPlayersView.gd
+res://realm/RealmServer.gd
+res://player/player.gd

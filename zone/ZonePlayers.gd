@@ -7,7 +7,7 @@ var log: Callable = func(_m): pass
 var player_scene: PackedScene = null
 var players_root: Node = null
 
-# peer_id -> { character_id:int, xform:Transform3D, target:Vector3, yaw:float }
+# peer_id -> { character_id:int, name:String, xform:Transform3D, target:Vector3, yaw:float }
 var players_by_peer: Dictionary = {}
 
 func configure(_player_scene: PackedScene, _players_root: Node) -> void:
@@ -26,9 +26,10 @@ func remove_peer(peer_id: int) -> void:
 	if n:
 		n.queue_free()
 
-func add_peer(peer_id: int, character_id: int, xform: Transform3D) -> void:
+func add_peer(peer_id: int, character_id: int, character_name: String, xform: Transform3D) -> void:
 	players_by_peer[peer_id] = {
 		"character_id": character_id,
+		"name": character_name,
 		"xform": xform,
 		"target": xform.origin,
 		"yaw": 0.0,
@@ -44,6 +45,8 @@ func add_peer(peer_id: int, character_id: int, xform: Transform3D) -> void:
 			(p as Node3D).global_transform = xform
 		if p.has_method("server_init"):
 			p.call("server_init", character_id)
+		if p.has_method("set_player_name"):
+			p.call("set_player_name", character_name)
 
 func set_move_target(peer_id: int, world_pos: Vector3) -> void:
 	if not players_by_peer.has(peer_id):
@@ -72,6 +75,7 @@ func build_spawn_bulk_list() -> Array:
 		snapshot_list.append({
 			"peer_id": int(pid),
 			"character_id": int(st.get("character_id", 0)),
+			"name": str(st.get("name", "")),
 			"xform": st.get("xform", Transform3D.IDENTITY),
 			"yaw": float(st.get("yaw", 0.0)),
 		})

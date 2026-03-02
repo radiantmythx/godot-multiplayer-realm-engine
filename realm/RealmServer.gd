@@ -383,7 +383,7 @@ func c_request_create_zone(map_id: String, seed: int, capacity: int) -> void:
 	c_request_zone_list()
 
 @rpc("any_peer", "reliable")
-func c_request_enter_instance(instance_id: int, character_id: int) -> void:
+func c_request_enter_instance(instance_id: int, character_id: int, character_name: String) -> void:
 	var client_peer_id := multiplayer.get_remote_sender_id()
 
 	if auth_sessions.has(client_peer_id) == false:
@@ -416,6 +416,7 @@ func c_request_enter_instance(instance_id: int, character_id: int) -> void:
 		"instance_id": int(inst.instance_id),
 		"character_id": character_id,
 		"account_id": int(auth.account_id),
+		"character_name": character_name,
 		"session_id": str(client_peer_id),
 		"iat": now,
 		"exp": now + 20,
@@ -431,39 +432,3 @@ func c_request_enter_instance(instance_id: int, character_id: int) -> void:
 		"seed": int(inst.seed),
 		"join_ticket": token
 	})
-
-
-@rpc("authority", "reliable")
-func s_create_zone_failed(_reason: String) -> void:
-	pass
-
-@rpc("authority", "reliable")
-func s_join_accepted(_data: Dictionary) -> void:
-	pass
-
-@rpc("authority", "reliable")
-func s_join_rejected(_reason: String) -> void:
-	pass
-
-@rpc("any_peer", "reliable")
-func c_join_instance(_join_ticket: String, _character_id: int) -> void:
-	pass
-
-@rpc("any_peer", "unreliable")
-func c_set_move_target(_world_pos: Vector3) -> void: pass
-
-@rpc("authority", "reliable")
-func s_spawn_players_bulk(_list: Array) -> void: pass
-
-@rpc("authority", "reliable")
-func s_spawn_player(_peer_id: int, _character_id: int, _xform: Transform3D) -> void: pass
-
-@rpc("authority", "reliable")
-func s_despawn_player(_peer_id: int) -> void: pass
-
-@rpc("authority", "unreliable")
-func s_apply_snapshots(_snaps: Array) -> void: pass
-
-@rpc("authority", "reliable")
-func s_auth_ok(_data: Dictionary) -> void:
-	pass

@@ -46,10 +46,11 @@ func c_request_zone_list() -> void:
 func c_request_create_zone(_map_id: String, _seed: int, _capacity: int) -> void:
 	pass
 
+# UPDATED: include character_name so Realm can embed it in the signed join ticket.
 @rpc("any_peer", "reliable")
-func c_request_enter_instance(_instance_id: int, _character_id: int) -> void:
+func c_request_enter_instance(_instance_id: int, _character_id: int, _character_name: String) -> void:
 	pass
-	
+
 @rpc("any_peer", "reliable")
 func c_leave_zone() -> void:
 	pass
@@ -85,7 +86,7 @@ func s_spawn_players_bulk(_list: Array) -> void:
 	pass
 
 @rpc("authority", "reliable")
-func s_spawn_player(_peer_id: int, _character_id: int, _xform: Transform3D) -> void:
+func s_spawn_player(_peer_id: int, _character_id: int, _name: String, _xform: Transform3D) -> void:
 	pass
 
 @rpc("authority", "reliable")
