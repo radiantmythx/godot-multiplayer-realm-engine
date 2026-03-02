@@ -27,3 +27,7 @@ res://realm/services/RealmSessions.gd
 res://realm/services/InstanceRegistry.gd
 res://realm/services/ZoneSupervisor.gd
 res://realm/services/ApiGateway.gd
+res://client/services/ClientSession.gd
+res://client/services/ClientConnection.gd
+res://client/services/ClientZoneWatchdog.gd
+res://client/services/ClientGameplay.gd
