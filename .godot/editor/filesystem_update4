@@ -21,3 +21,5 @@ res://client/view/ClientPlayersView.gd
 res://realm/RealmServer.gd
 res://player/player.gd
 res://client/api/ClientMaps.gd
+res://client/api/ClientCharacters.gd
+res://client/api/ClientAuth.gd

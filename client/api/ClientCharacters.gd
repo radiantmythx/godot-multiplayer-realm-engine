@@ -7,80 +7,83 @@ signal delete_ok(character_id: int)
 signal request_failed(reason: String)
 
 var log: Callable = func(_m): pass
-var api_base: String = "http://localhost:5131"
 
-var http: HTTPRequest
+var _cm: Node = null
 var _pending_kind: String = "" # "list" | "create" | "delete"
 var _pending_delete_id: int = 0
 
 func _ready() -> void:
-	http = HTTPRequest.new()
-	add_child(http)
-	http.request_completed.connect(_on_request_completed)
+	_cm = get_tree().get_first_node_in_group("client_main")
+	if _cm and _cm.has_signal("lobby_response"):
+		_cm.connect("lobby_response", Callable(self, "_on_lobby_response"))
 
-func list_characters(token: String) -> void:
-	_pending_kind = "list"
-	var url := api_base + "/api/characters"
-	_request_json(url, HTTPClient.METHOD_GET, token, null)
-
-func create_character(token: String, name: String, class_id: String = "templar") -> void:
-	_pending_kind = "create"
-	var url := api_base + "/api/characters"
-
-	_request_json(url, HTTPClient.METHOD_POST, token, {
-		"Name": name.strip_edges(),
-		"ClassId": class_id.strip_edges()
-	})
-
-func delete_character(token: String, character_id: int) -> void:
-	_pending_kind = "delete"
-	_pending_delete_id = character_id
-	var url := api_base + "/api/characters/%d" % character_id
-	_request_json(url, HTTPClient.METHOD_DELETE, token, null)
-
-func _request_json(url: String, method: int, token: String, body_dict: Variant) -> void:
-	var headers: Array[String] = [
-		"Content-Type: application/json",
-		"Accept: application/json",
-		"Authorization: Bearer " + token
-	]
-
-	var body := ""
-	if body_dict != null:
-		body = JSON.stringify(body_dict)
-
-	log.call("[CLIENT] Characters " + _pending_kind.to_upper() + " " + url)
-	var err := http.request(url, headers, method, body)
-	if err != OK:
-		emit_signal("request_failed", "http_request_failed_" + str(err))
-
-func _on_request_completed(_result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	var text := body.get_string_from_utf8()
-
-	# Try to parse JSON either way (errors come back as json)
-	var parsed = JSON.parse_string(text)
-	var dict = parsed if typeof(parsed) == TYPE_DICTIONARY else {}
-
-	if response_code < 200 or response_code >= 300:
-		var err_msg := str(dict.get("error", "http_" + str(response_code)))
-		log.call("[CLIENT] Characters failed kind=" + _pending_kind + " http=" + str(response_code) + " err=" + err_msg)
-		emit_signal("request_failed", err_msg)
+func list_characters(_token_ignored: String) -> void:
+	if _cm == null:
+		emit_signal("request_failed", "no_client_main")
+		return
+	if not _cm.has_method("lobby_request"):
+		emit_signal("request_failed", "client_main_missing_lobby_request")
 		return
 
-	match _pending_kind:
-		"list":
-			var chars: Array = []
-			if typeof(dict) == TYPE_DICTIONARY:
-				chars = dict.get("characters", [])
+	_pending_kind = "list"
+	log.call("[CLIENT] Characters LIST via Realm RPC")
+	_cm.call("lobby_request", "chars_list", {})
+
+func create_character(_token_ignored: String, name: String, class_id: String = "templar") -> void:
+	if _cm == null:
+		emit_signal("request_failed", "no_client_main")
+		return
+	if not _cm.has_method("lobby_request"):
+		emit_signal("request_failed", "client_main_missing_lobby_request")
+		return
+
+	_pending_kind = "create"
+	log.call("[CLIENT] Characters CREATE via Realm RPC")
+	_cm.call("lobby_request", "char_create", {
+		"name": name.strip_edges(),
+		"class_id": class_id.strip_edges()
+	})
+
+func delete_character(_token_ignored: String, character_id: int) -> void:
+	if _cm == null:
+		emit_signal("request_failed", "no_client_main")
+		return
+	if not _cm.has_method("lobby_request"):
+		emit_signal("request_failed", "client_main_missing_lobby_request")
+		return
+
+	_pending_kind = "delete"
+	_pending_delete_id = character_id
+	log.call("[CLIENT] Characters DELETE via Realm RPC")
+	_cm.call("lobby_request", "char_delete", { "id": character_id })
+
+func _on_lobby_response(kind: String, ok: bool, payload: Dictionary) -> void:
+	# Route only character-related responses
+	if kind != "chars_list" and kind != "char_create" and kind != "char_delete":
+		return
+
+	if not ok:
+		var err := str(payload.get("error", "unknown_error"))
+		log.call("[CLIENT] Characters failed kind=%s err=%s" % [kind, err])
+		emit_signal("request_failed", err)
+		_pending_kind = ""
+		return
+
+	match kind:
+		"chars_list":
+			var chars: Array = payload.get("characters", [])
 			emit_signal("list_ok", chars)
+			_pending_kind = ""
 
-		"create":
-			# Your controller returns the created character object (dict)
-			emit_signal("create_ok", dict)
+		"char_create":
+			# API returns created character dict
+			emit_signal("create_ok", payload)
+			_pending_kind = ""
 
-		"delete":
+		"char_delete":
 			emit_signal("delete_ok", _pending_delete_id)
+			_pending_kind = ""
 
 		_:
-			# Unknown state, still treat as error-ish
-			emit_signal("request_failed", "unknown_pending_kind_" + str(_pending_kind))
+			emit_signal("request_failed", "unknown_kind_" + str(kind))
+			_pending_kind = ""

@@ -24,7 +24,7 @@ signal login_success(token: String, account_id: int, username: String)
 @onready var char_create_btn: Button = $Panel/VBox/CharactersContainer/CreateCharacterButton
 @onready var char_delete_btn: Button = $Panel/VBox/CharactersContainer/DeleteCharacterButton
 
-# NEW: Maps UI
+# Maps UI
 @onready var maps_container: Control = $Panel/VBox/MapsContainer
 @onready var maps_label: Control = $Panel/VBox/MapsContainer/MapsLabel
 @onready var maps_list: ItemList = $Panel/VBox/MapsContainer/MapsList
@@ -42,8 +42,6 @@ signal login_success(token: String, account_id: int, username: String)
 # Modules
 # -------------------------
 var auth: ClientAuth
-var chars_api: ClientCharacters
-var maps_api: ClientMaps # NEW
 
 const MODE_LOGIN := 0
 const MODE_REGISTER := 1
@@ -51,46 +49,34 @@ const MODE_REGISTER := 1
 var _is_authed := false
 var _account_id := 0
 var _username := ""
-var _token := ""
+var _token := "" # still stored for display / future use; Realm is the source of truth now
 
 var _refresh_timer: Timer
 var _zones: Array = []        # last zone list from realm
-var _characters: Array = []   # last character list from API
+var _characters: Array = []   # last character list from Realm->API
 var _selected_character_id: int = 0
-var _selected_character_name: String = "" # NEW
+var _selected_character_name: String = ""
 
-# NEW: maps state
+# maps state
 var _maps: Array = [] # Array[Dictionary]
-var _selected_map_scene_path: String = "" # what we pass to Realm as map_id (scene path)
+var _selected_map_scene_path: String = "" # passed to Realm as map_id (scene path)
 
-# Default/fallback (must match RealmServer HUB_MAP_ID / your actual hub scene)
 const DEFAULT_HUB_SCENE := "res://maps/HubMap.tscn"
+
+# simple throttling for lobby gateway (since Realm HTTP is single-flight)
+var _retry_timer: Timer
+var _pending_lobby_kind: String = "" # "" means idle
+var _pending_after: Array[String] = [] # kinds to request after current succeeds (optional)
 
 func _ready() -> void:
 	status_lbl.text = ""
 
-	# Auth helper (HTTP)
+	# Auth helper (now expected to use lobby gateway internally, not direct API)
 	auth = ClientAuth.new()
 	auth.log = func(m): ProcLog.lines([m])
 	add_child(auth)
 	auth.auth_ok.connect(_on_auth_ok)
 	auth.auth_failed.connect(_on_auth_failed)
-
-	# Characters helper (HTTP)
-	chars_api = ClientCharacters.new()
-	chars_api.log = func(m): ProcLog.lines([m])
-	add_child(chars_api)
-	chars_api.list_ok.connect(_on_chars_list_ok)
-	chars_api.create_ok.connect(_on_chars_create_ok)
-	chars_api.delete_ok.connect(_on_chars_delete_ok)
-	chars_api.request_failed.connect(_on_chars_failed)
-
-	# NEW: Maps helper (HTTP)
-	maps_api = ClientMaps.new()
-	maps_api.log = func(m): ProcLog.lines([m])
-	add_child(maps_api)
-	maps_api.list_ok.connect(_on_maps_list_ok)
-	maps_api.request_failed.connect(_on_maps_failed)
 
 	# Mode selector
 	mode_opt.clear()
@@ -115,7 +101,7 @@ func _ready() -> void:
 	char_create_btn.pressed.connect(_create_character)
 	char_delete_btn.pressed.connect(_delete_character)
 
-	# NEW: Maps UI
+	# Maps UI
 	maps_list.clear()
 	maps_list.item_selected.connect(func(_i): _on_map_selected())
 
@@ -133,7 +119,26 @@ func _ready() -> void:
 	_refresh_timer.timeout.connect(_refresh_zones)
 	add_child(_refresh_timer)
 
+	# Retry timer for "rate_limited"
+	_retry_timer = Timer.new()
+	_retry_timer.one_shot = true
+	_retry_timer.wait_time = 0.25
+	_retry_timer.timeout.connect(_retry_pending_lobby)
+	add_child(_retry_timer)
+
+	# Connect to ClientMain lobby_response signal
+	_try_bind_client_main()
+
 	_apply_logged_out_ui()
+
+func _try_bind_client_main() -> void:
+	var cm := _get_client_main()
+	if cm == null:
+		return
+	# Avoid double connect
+	if cm.is_connected("lobby_response", Callable(self, "_on_lobby_response")):
+		return
+	cm.connect("lobby_response", Callable(self, "_on_lobby_response"))
 
 # Optional hooks from outside
 func set_authed(enabled: bool, account_id: int = 0, username: String = "") -> void:
@@ -165,6 +170,8 @@ func _on_mode_changed(_idx: int) -> void:
 func _on_submit() -> void:
 	if _is_authed:
 		return
+
+	_try_bind_client_main()
 
 	var is_register := mode_opt.get_selected_id() == MODE_REGISTER
 
@@ -211,13 +218,15 @@ func _on_auth_ok(token: String, account_id: int, username: String) -> void:
 	_zones.clear()
 	zones_list.clear()
 
+	_pending_lobby_kind = ""
+	_pending_after.clear()
+	if _retry_timer:
+		_retry_timer.stop()
+
 	_apply_logged_in_ui()
 
-	# Load characters
-	chars_api.list_characters(_token)
-
-	# Load maps (requires token if your endpoint is [Authorize])
-	maps_api.list_maps(_token, true, false)
+	# IMPORTANT: serialize requests to avoid Realm HTTP single-flight collisions
+	_request_maps_then_chars()
 
 	# Start refresh loop (realm will connect shortly)
 	if _refresh_timer:
@@ -256,6 +265,11 @@ func _logout() -> void:
 	_zones.clear()
 	zones_list.clear()
 
+	_pending_lobby_kind = ""
+	_pending_after.clear()
+	if _retry_timer:
+		_retry_timer.stop()
+
 	# Reset login form a bit
 	password_edit.text = ""
 	_on_mode_changed(mode_opt.selected)
@@ -271,41 +285,28 @@ func _logout() -> void:
 # UI gating / visibility
 # -------------------------
 func _apply_logged_out_ui() -> void:
-	# Show login; hide everything else
 	user_login_container.visible = true
 	logout_container.visible = false
 	characters_container.visible = false
 	maps_container.visible = false
 	zones_container.visible = false
 
-	# Enable/disable
 	login_btn.disabled = false
 	char_create_btn.disabled = true
 	char_delete_btn.disabled = true
-
-	# maps selection disabled while logged out
-	#maps_list.disabled = true
-
 	refresh_btn.disabled = true
 	create_btn.disabled = true
 	join_btn.disabled = true
 
 func _apply_logged_in_ui() -> void:
-	# Hide login; show logout + characters + maps
 	user_login_container.visible = false
 	logout_container.visible = true
 	characters_container.visible = true
 	maps_container.visible = true
-
-	# Zones stay hidden until character selected
 	zones_container.visible = false
 
-	# Enable/disable
 	char_create_btn.disabled = false
 	char_delete_btn.disabled = true
-
-	#maps_list.disabled = false
-
 	refresh_btn.disabled = true
 	create_btn.disabled = true
 	join_btn.disabled = true
@@ -315,7 +316,6 @@ func _sync_gate_visibility_and_enabled() -> void:
 		_apply_logged_out_ui()
 		return
 
-	# Logged in always shows logout + characters + maps
 	user_login_container.visible = false
 	logout_container.visible = true
 	characters_container.visible = true
@@ -324,44 +324,141 @@ func _sync_gate_visibility_and_enabled() -> void:
 	var has_char := _selected_character_id > 0
 	zones_container.visible = has_char
 
-	# Character controls
 	char_create_btn.disabled = false
 	char_delete_btn.disabled = not has_char
 
-	# Maps is always selectable when authed
-	#maps_list.disabled = false
-
-	# Zone controls (only usable once character selected)
 	refresh_btn.disabled = not has_char
 	create_btn.disabled = not has_char
 
-	# Join requires zone selection too
 	var has_zone := has_char and not zones_list.get_selected_items().is_empty()
 	join_btn.disabled = not has_zone
 
 # -------------------------
-# Maps list (API)
+# Lobby gateway helpers (ClientMain <-> Realm)
 # -------------------------
+func _lobby_request(kind: String, payload: Dictionary) -> void:
+	var cm := _get_client_main()
+	if cm == null:
+		status_lbl.text = "ClientMain not found."
+		return
+
+	# simple "one at a time" from UI side too (helps reduce collisions)
+	if _pending_lobby_kind != "":
+		# queue replacement behavior: last request wins
+		_pending_after.clear()
+		_pending_after.append(kind + "|" + JSON.stringify(payload))
+		return
+
+	_pending_lobby_kind = kind
+	cm.call("lobby_request", kind, payload)
+
+func _retry_pending_lobby() -> void:
+	if _pending_lobby_kind == "":
+		return
+	# Just re-send the same pending request by asking ClientMain again is tricky (we don't store payload).
+	# So for retries we instead re-issue the last "known" sequences.
+	# We'll use this only for the startup sequence.
+	if _pending_lobby_kind == "maps_list":
+		_request_maps_then_chars()
+	elif _pending_lobby_kind == "chars_list":
+		_request_chars_list()
+	elif _pending_lobby_kind == "char_create":
+		# user action: let them click again
+		status_lbl.text = "Try again."
+		_pending_lobby_kind = ""
+	elif _pending_lobby_kind == "char_delete":
+		status_lbl.text = "Try again."
+		_pending_lobby_kind = ""
+	else:
+		_pending_lobby_kind = ""
+
+func _on_lobby_response(kind: String, ok: bool, payload: Dictionary) -> void:
+	# clear pending if it matches (otherwise ignore)
+	if kind == _pending_lobby_kind:
+		_pending_lobby_kind = ""
+
+	# Handle rate limiting / busy
+	if not ok:
+		var err := str(payload.get("error", "unknown_error"))
+		if err == "rate_limited" or err == "busy":
+			# backoff retry for startup list calls
+			if kind == "maps_list" or kind == "chars_list":
+				status_lbl.text = "%s: %s (retrying...)" % [kind, err]
+				if _retry_timer:
+					_retry_timer.start()
+				_pending_lobby_kind = kind # keep it pending for retry
+				return
+		# normal error
+		if kind.begins_with("char_") or kind == "chars_list":
+			status_lbl.text = "Characters: " + err
+		elif kind == "maps_list":
+			status_lbl.text = "Maps: " + err + " (defaulting to Hub)"
+			_maps.clear()
+			maps_list.clear()
+			_selected_map_scene_path = DEFAULT_HUB_SCENE
+		else:
+			status_lbl.text = kind + ": " + err
+		_sync_gate_visibility_and_enabled()
+		return
+
+	# success handlers
+	match kind:
+		"maps_list":
+			var list: Array = payload.get("maps", [])
+			_on_maps_list_ok(list)
+			# after maps, request characters
+			_request_chars_list()
+
+		"chars_list":
+			var chars: Array = payload.get("characters", [])
+			_on_chars_list_ok(chars)
+
+		"char_create":
+			# reload list
+			_request_chars_list()
+
+		"char_delete":
+			_selected_character_id = 0
+			_selected_character_name = ""
+			zones_list.deselect_all()
+			_request_chars_list()
+
+		_:
+			# ignore unknown
+			pass
+
+	# if we had a queued "after" request, issue it now
+	if _pending_after.size() > 0 and _pending_lobby_kind == "":
+		var packed = _pending_after.pop_front()
+		var sep = packed.find("|")
+		if sep > 0:
+			var k = packed.substr(0, sep)
+			var js = packed.substr(sep + 1)
+			var p = JSON.parse_string(js)
+			var d = p if typeof(p) == TYPE_DICTIONARY else {}
+			_lobby_request(k, d)
+
+# -------------------------
+# Maps list
+# -------------------------
+func _request_maps_then_chars() -> void:
+	_request_maps_list()
+
+func _request_maps_list() -> void:
+	_lobby_request("maps_list", {
+		"playable": true,
+		"hidden": false
+	})
+
 func _on_maps_list_ok(list: Array) -> void:
 	_maps = list
 	_render_maps()
-
-	# Auto-select hub if present, else first map.
 	_auto_select_default_map()
-
 	_sync_gate_visibility_and_enabled()
-
-func _on_maps_failed(reason: String) -> void:
-	# Don't block login; just warn and fallback to Hub.
-	status_lbl.text = "Maps: " + reason + " (defaulting to Hub)"
-	_maps.clear()
-	maps_list.clear()
-	_selected_map_scene_path = DEFAULT_HUB_SCENE
 
 func _render_maps() -> void:
 	maps_list.clear()
 
-	# Sort by sortOrder then id if present (matches your API fields)
 	_maps.sort_custom(func(a, b):
 		var sa := int(a.get("sortOrder", a.get("sort_order", 0)))
 		var sb := int(b.get("sortOrder", b.get("sort_order", 0)))
@@ -375,12 +472,9 @@ func _render_maps() -> void:
 		var kind := str(m.get("kind", ""))
 		var scene_path := str(m.get("scenePath", m.get("scene_path", "")))
 
-		# Keep label readable; show kind; keep scene path out of UI
 		var label := name
 		if kind != "":
 			label += "  [%s]" % kind
-
-		# Small hint if scene path is missing
 		if scene_path == "":
 			label += "  (missing scenePath!)"
 
@@ -389,7 +483,7 @@ func _render_maps() -> void:
 func _auto_select_default_map() -> void:
 	_selected_map_scene_path = ""
 
-	# Prefer slug == "hub" if present
+	# Prefer slug == "hub"
 	var hub_index := -1
 	for i in range(_maps.size()):
 		var slug := str(_maps[i].get("slug", ""))
@@ -402,13 +496,11 @@ func _auto_select_default_map() -> void:
 		_on_map_selected()
 		return
 
-	# Else pick first
 	if _maps.size() > 0:
 		maps_list.select(0)
 		_on_map_selected()
 		return
 
-	# Else fallback
 	_selected_map_scene_path = DEFAULT_HUB_SCENE
 
 func _on_map_selected() -> void:
@@ -419,9 +511,84 @@ func _on_map_selected() -> void:
 
 	var m = _maps[int(sel[0])]
 	_selected_map_scene_path = str(m.get("scenePath", m.get("scene_path", ""))).strip_edges()
-
 	if _selected_map_scene_path == "":
 		_selected_map_scene_path = DEFAULT_HUB_SCENE
+
+# -------------------------
+# Characters list
+# -------------------------
+func _request_chars_list() -> void:
+	_lobby_request("chars_list", {})
+
+func _on_chars_list_ok(list: Array) -> void:
+	_characters = list
+	_render_characters()
+
+	_selected_character_id = 0
+	_selected_character_name = ""
+	zones_list.deselect_all()
+	status_lbl.text = "Select a character."
+	_sync_gate_visibility_and_enabled()
+
+func _render_characters() -> void:
+	chars_list.clear()
+
+	_characters.sort_custom(func(a, b):
+		return int(a.get("id", 0)) < int(b.get("id", 0))
+	)
+
+	for ch in _characters:
+		var id := int(ch.get("id", 0))
+		var name := str(ch.get("name", ""))
+		var cls := str(ch.get("classId", ch.get("class_id", "")))
+		var lvl := int(ch.get("level", 1))
+		chars_list.add_item("#%d  %s  (%s Lv%d)" % [id, name, cls, lvl])
+
+func _on_character_selected() -> void:
+	var sel := chars_list.get_selected_items()
+	if sel.is_empty():
+		_selected_character_id = 0
+		_selected_character_name = ""
+	else:
+		var ch = _characters[int(sel[0])]
+		_selected_character_id = int(ch.get("id", 0))
+		_selected_character_name = str(ch.get("name", ""))
+		zones_list.deselect_all()
+
+	_sync_gate_visibility_and_enabled()
+
+	if _selected_character_id > 0:
+		_refresh_zones()
+
+func _create_character() -> void:
+	if not _is_authed:
+		status_lbl.text = "Login first."
+		return
+
+	var name := char_name_edit.text.strip_edges()
+	if name == "":
+		status_lbl.text = "Enter a character name."
+		return
+
+	# serialize UI requests too
+	status_lbl.text = "Creating character..."
+	char_name_edit.text = ""
+
+	_lobby_request("char_create", {
+		"name": name,
+		"class_id": "templar"
+	})
+
+func _delete_character() -> void:
+	if not _is_authed:
+		status_lbl.text = "Login first."
+		return
+	if _selected_character_id <= 0:
+		status_lbl.text = "Select a character to delete."
+		return
+
+	status_lbl.text = "Deleting character..."
+	_lobby_request("char_delete", { "id": _selected_character_id })
 
 # -------------------------
 # Zone list
@@ -491,7 +658,6 @@ func _create_zone() -> void:
 		status_lbl.text = "Select a character first."
 		return
 
-	# NEW: use selected map scene path (DB-driven), fallback to hub
 	var map_id := _selected_map_scene_path if _selected_map_scene_path != "" else DEFAULT_HUB_SCENE
 	var seed := randi()
 	var capacity := 32
@@ -501,85 +667,3 @@ func _create_zone() -> void:
 	var cm := _get_client_main()
 	if cm and cm.has_method("request_create_zone"):
 		cm.call("request_create_zone", map_id, seed, capacity)
-
-# -------------------------
-# Characters UI + API
-# -------------------------
-func _on_chars_list_ok(list: Array) -> void:
-	_characters = list
-	_render_characters()
-
-	_selected_character_id = 0
-	_selected_character_name = ""
-	zones_list.deselect_all()
-	status_lbl.text = "Select a character."
-	_sync_gate_visibility_and_enabled()
-
-func _on_chars_create_ok(_character: Dictionary) -> void:
-	chars_api.list_characters(_token)
-
-func _on_chars_delete_ok(_character_id: int) -> void:
-	_selected_character_id = 0
-	_selected_character_name = ""
-	zones_list.deselect_all()
-	chars_api.list_characters(_token)
-	_sync_gate_visibility_and_enabled()
-
-func _on_chars_failed(reason: String) -> void:
-	status_lbl.text = "Characters: " + reason
-
-func _render_characters() -> void:
-	chars_list.clear()
-
-	_characters.sort_custom(func(a, b):
-		return int(a.get("id", 0)) < int(b.get("id", 0))
-	)
-
-	for ch in _characters:
-		var id := int(ch.get("id", 0))
-		var name := str(ch.get("name", ""))
-		var cls := str(ch.get("classId", ch.get("class_id", "")))
-		var lvl := int(ch.get("level", 1))
-		chars_list.add_item("#%d  %s  (%s Lv%d)" % [id, name, cls, lvl])
-
-func _on_character_selected() -> void:
-	var sel := chars_list.get_selected_items()
-	if sel.is_empty():
-		_selected_character_id = 0
-		_selected_character_name = ""
-	else:
-		var ch = _characters[int(sel[0])]
-		_selected_character_id = int(ch.get("id", 0))
-		_selected_character_name = str(ch.get("name", ""))
-		zones_list.deselect_all()
-
-	_sync_gate_visibility_and_enabled()
-
-	# Nice UX: once a character is selected, fetch zones immediately
-	if _selected_character_id > 0:
-		_refresh_zones()
-
-func _create_character() -> void:
-	if not _is_authed:
-		status_lbl.text = "Login first."
-		return
-
-	var name := char_name_edit.text.strip_edges()
-	if name == "":
-		status_lbl.text = "Enter a character name."
-		return
-
-	status_lbl.text = "Creating character..."
-	chars_api.create_character(_token, name, "templar")
-	char_name_edit.text = ""
-
-func _delete_character() -> void:
-	if not _is_authed:
-		status_lbl.text = "Login first."
-		return
-	if _selected_character_id <= 0:
-		status_lbl.text = "Select a character to delete."
-		return
-
-	status_lbl.text = "Deleting character..."
-	chars_api.delete_character(_token, _selected_character_id)

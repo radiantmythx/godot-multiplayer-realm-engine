@@ -120,3 +120,13 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_break_target(_target_id: int) -> void:
 	pass
+
+# ---------------- Realm <-> Client (generic lobby gateway) ----------------
+
+@rpc("any_peer", "reliable")
+func c_lobby_request(_kind: String, _payload: Dictionary) -> void:
+	pass
+
+@rpc("authority", "reliable")
+func s_lobby_response(_kind: String, _ok: bool, _payload: Dictionary) -> void:
+	pass

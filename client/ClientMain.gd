@@ -20,15 +20,11 @@ var combat_view: ClientCombatView
 var aim: ClientAim
 var input: ClientInput
 
-var jwt_token: String = "" # set this after HTTP login later
+# Auth/session
+var jwt_token: String = ""
 var is_realm_authed: bool = false
-
-# auth
-var auth: ClientAuth
 var auth_account_id: int = 0
 var auth_username: String = ""
-
-var has_started: bool = false
 
 enum ConnKind { NONE, REALM, ZONE }
 var conn_kind: ConnKind = ConnKind.NONE
@@ -44,19 +40,8 @@ var last_zone_packet_ms: int = 0
 var zone_watchdog: Timer
 const ZONE_TIMEOUT_MS := 2500
 
-func begin_with_token(token: String, account_id: int, username: String) -> void:
-	if has_started:
-		return
-	has_started = true
-
-	jwt_token = token
-	auth_account_id = account_id
-	auth_username = username
-
-	ProcLog.lines(["[CLIENT] begin_with_token account=", account_id, " user=", username])
-
-	# Connect realm now that we have JWT
-	net.connect_realm(multiplayer)
+# Generic lobby envelope (Pattern B)
+signal lobby_response(kind: String, ok: bool, payload: Dictionary)
 
 func _ready() -> void:
 	set_process_input(true)
@@ -93,11 +78,9 @@ func _ready() -> void:
 	net.realm_connected.connect(_on_realm_connected)
 	net.zone_connected.connect(_on_zone_connected)
 
-	# these fire on failed connect or disconnect after connected
 	net.zone_disconnected.connect(func(): _on_zone_lost("server_disconnected"))
 	net.zone_connection_failed.connect(func(): _on_zone_lost("connection_failed"))
 
-	# Optional: realm disconnect handling (usually you'd just show an error)
 	net.realm_disconnected.connect(func(): _on_realm_lost("realm_disconnected"))
 	net.realm_connection_failed.connect(func(): _on_realm_lost("realm_connection_failed"))
 
@@ -119,6 +102,11 @@ func _ready() -> void:
 	login_ui = login_screen_scene.instantiate()
 	add_child(login_ui)
 
+	# Connect to Realm immediately (Option B: Realm is the gateway)
+	# NOTE: set_realm will be overridden later by config; for now keep localhost dev.
+	net.set_realm("127.0.0.1", 1909)
+	net.connect_realm(multiplayer)
+
 	# LoginScreen must have signal login_success(token, account_id, username)
 	login_ui.login_success.connect(func(token: String, account_id: int, username: String):
 		begin_with_token(token, account_id, username)
@@ -126,6 +114,19 @@ func _ready() -> void:
 		if login_ui.has_method("set_authed"):
 			login_ui.call("set_authed", true, account_id, username)
 	)
+
+# Called by LoginScreen after Realm-gateway auth succeeds
+func begin_with_token(token: String, account_id: int, username: String) -> void:
+	jwt_token = token
+	auth_account_id = account_id
+	auth_username = username
+
+	ProcLog.lines(["[CLIENT] begin_with_token account=", account_id, " user=", username])
+
+	# If we're already connected to Realm, authenticate now.
+	# If not connected yet, _on_realm_connected will authenticate when it does connect.
+	if conn_kind == ConnKind.REALM and _peer_connected():
+		_send_realm_authenticate()
 
 # ---------------- Connection helpers ----------------
 
@@ -137,6 +138,16 @@ func _peer_connected() -> bool:
 		return p.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 	return true
 
+func _send_realm_authenticate() -> void:
+	is_realm_authed = false
+
+	if jwt_token.is_empty():
+		# Not logged in yet; that's OK in Option B (we still stay connected to Realm)
+		return
+
+	ProcLog.lines(["[CLIENT] Sending c_authenticate to Realm..."])
+	rpc_id(1, "c_authenticate", jwt_token)
+
 func _mark_zone_packet() -> void:
 	last_zone_packet_ms = Time.get_ticks_msec()
 
@@ -144,12 +155,10 @@ func _zone_watchdog_tick() -> void:
 	if conn_kind != ConnKind.ZONE:
 		return
 
-	# If ENet says we're not connected, bail immediately
 	if not _peer_connected():
 		_on_zone_lost("peer_not_connected")
 		return
 
-	# If we haven't received packets recently, assume zone died/hung
 	var now := Time.get_ticks_msec()
 	if last_zone_packet_ms > 0 and (now - last_zone_packet_ms) > ZONE_TIMEOUT_MS:
 		_on_zone_lost("snapshot_timeout")
@@ -157,12 +166,10 @@ func _zone_watchdog_tick() -> void:
 # ---------------- Input / tick ----------------
 
 func _input(event: InputEvent) -> void:
-	# allow ESC always
 	if event.is_action_pressed("ui_cancel"):
 		back_to_lobby()
 		return
 
-	# Ignore gameplay input unless in zone and connected
 	if conn_kind != ConnKind.ZONE:
 		return
 	if not _peer_connected():
@@ -174,7 +181,6 @@ func _input(event: InputEvent) -> void:
 		_try_fire_at_screen(event.position)
 
 func _process(dt: float) -> void:
-	# only run gameplay loop when actually in-zone and connected
 	if conn_kind != ConnKind.ZONE:
 		return
 	if not _peer_connected():
@@ -188,14 +194,13 @@ func _process(dt: float) -> void:
 
 func _on_realm_connected() -> void:
 	conn_kind = ConnKind.REALM
-	is_realm_authed = false
 
-	if jwt_token == "":
-		push_error("[CLIENT] No jwt_token set; cannot authenticate with Realm.")
-		return
+	ProcLog.lines(["[CLIENT] Realm connected"])
+	_send_realm_authenticate()
 
-	ProcLog.lines(["[CLIENT] Sending c_authenticate to Realm..."])
-	rpc_id(1, "c_authenticate", jwt_token)
+	# If your UI wants to show "connected", do it here:
+	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
+		login_ui.call("set_status", "Connected to Realm.")
 
 func _on_zone_connected() -> void:
 	conn_kind = ConnKind.ZONE
@@ -206,9 +211,10 @@ func _on_zone_connected() -> void:
 		rpc_id(1, "c_join_instance", current_join_ticket, current_character_id)
 
 func _on_realm_lost(reason: String) -> void:
-	# if realm drops while in lobby, just show message
 	if conn_kind == ConnKind.REALM:
 		conn_kind = ConnKind.NONE
+		is_realm_authed = false
+
 		if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
 			login_ui.call("set_status", "Realm connection lost: " + reason)
 
@@ -218,11 +224,9 @@ func _on_zone_lost(reason: String) -> void:
 
 	ProcLog.lines(["[CLIENT] Zone lost (", reason, ") -> back to lobby"])
 
-	# HARD STOP gameplay immediately so we don't spam RPCs
 	conn_kind = ConnKind.NONE
 	local_peer_id = 0
 
-	# cancel hold-to-move if you implement it
 	if input and input.has_method("cancel_holding_move"):
 		input.call("cancel_holding_move")
 
@@ -238,6 +242,8 @@ func request_zone_list() -> void:
 		return
 	if not _peer_connected():
 		return
+	if not is_realm_authed:
+		return
 	rpc_id(1, "c_request_zone_list")
 
 func request_create_zone(map_id: String, seed: int, capacity: int) -> void:
@@ -245,13 +251,16 @@ func request_create_zone(map_id: String, seed: int, capacity: int) -> void:
 		return
 	if not _peer_connected():
 		return
+	if not is_realm_authed:
+		return
 	rpc_id(1, "c_request_create_zone", map_id, seed, capacity)
 
-# UPDATED: accept character_name and forward to Realm so it can embed in ticket payload.
 func request_join_instance(instance_id: int, character_id: int, character_name: String) -> void:
 	if conn_kind != ConnKind.REALM:
 		return
 	if not _peer_connected():
+		return
+	if not is_realm_authed:
 		return
 
 	current_character_id = character_id
@@ -262,10 +271,18 @@ func request_join_instance(instance_id: int, character_id: int, character_name: 
 
 	rpc_id(1, "c_request_enter_instance", instance_id, character_id, safe_name)
 
+func lobby_request(kind: String, payload: Dictionary) -> void:
+	# Pattern B: generic lobby request envelope (Realm is our gateway)
+	if conn_kind != ConnKind.REALM:
+		return
+	if not _peer_connected():
+		return
+	rpc_id(1, "c_lobby_request", kind, payload)
+
 func back_to_lobby() -> void:
 	ProcLog.lines(["[CLIENT] Back to lobby requested"])
 
-	# If already in lobby/realm, just show UI + refresh
+	# If already connected to Realm, just show UI and refresh
 	if conn_kind == ConnKind.REALM:
 		if is_instance_valid(login_ui):
 			login_ui.visible = true
@@ -294,11 +311,12 @@ func back_to_lobby() -> void:
 	# Disconnect whatever is current (zone or half-dead)
 	net.disconnect_current(multiplayer)
 
-	# Reconnect to realm
+	# Reconnect to realm (dev default)
+	conn_kind = ConnKind.NONE
+	is_realm_authed = false
 	net.set_realm("127.0.0.1", 1909)
 	net.connect_realm(multiplayer)
 
-	# Show lobby UI again immediately (list will populate after s_auth_ok)
 	if is_instance_valid(login_ui):
 		login_ui.visible = true
 		if login_ui.has_method("set_status"):
@@ -311,7 +329,7 @@ func s_auth_ok(data: Dictionary) -> void:
 	is_realm_authed = true
 	ProcLog.lines(["[CLIENT] Realm auth ok: ", data])
 
-	ProcLog.lines(["[CLIENT] Requesting zone list..."])
+	# Now that we're authed, populate lobby.
 	if conn_kind == ConnKind.REALM and _peer_connected():
 		rpc_id(1, "c_request_zone_list")
 
@@ -361,7 +379,6 @@ func s_join_accepted(_data: Dictionary) -> void:
 	players_view.set_local_peer_id(local_peer_id)
 	players_view.try_activate_local_camera(self, world)
 
-	# optional: hide lobby UI now that we're in-game
 	if is_instance_valid(login_ui):
 		login_ui.visible = false
 
@@ -414,6 +431,13 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_break_target(target_id: int) -> void:
 	combat_view.break_target(target_id)
+
+# ---- Pattern B envelope ----
+
+@rpc("authority", "reliable")
+func s_lobby_response(kind: String, ok: bool, payload: Dictionary) -> void:
+	ProcLog.lines(["[CLIENT] lobby_response kind=", kind, " ok=", ok])
+	emit_signal("lobby_response", kind, ok, payload)
 
 # ---------------- client -> server intents ----------------
 
