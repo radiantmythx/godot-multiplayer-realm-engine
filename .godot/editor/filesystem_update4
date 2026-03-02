@@ -37,3 +37,5 @@ res://zone/combat/ProjectileSystem.gd
 res://zone/combat/CombatResolver.gd
 res://zone/combat/PlayerVitals.gd
 res://client/modules/ClientCombatView.gd
+res://player/HealthBar3D.gd
+res://client/modules/ClientPlayersView.gd

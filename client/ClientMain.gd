@@ -399,6 +399,7 @@ func s_player_hp(peer_id: int, hp: int) -> void:
 	# For now, just log. Later: update UI health bars.
 	# Only trust server.
 	ProcLog.lines(["[CLIENT] player_hp peer=", peer_id, " hp=", hp])
+	players_view.set_player_hp(peer_id, hp)
 
 @rpc("authority", "reliable")
 func s_player_died(peer_id: int) -> void:

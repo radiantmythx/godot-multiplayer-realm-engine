@@ -1,3 +1,8 @@
+Sprite3D
+CanvasLayer
+ProgressBar
+SubViewport
+Node3D
 ItemList
 Label
 VBoxContainer
@@ -8,7 +13,3 @@ HBoxContainer
 LineEdit
 PanelContainer
 Panel
-MeshInstance3D
-MultiplayerSynchronizer
-Camera3D
-MultiplayerSpawner

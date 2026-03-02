@@ -11,11 +11,14 @@ var local_peer_id: int = 0
 var local_player: Node3D = null
 var local_camera: Camera3D = null
 
+# replicated vitals cache (client-side)
+var hp_by_peer: Dictionary = {} # peer_id(int) -> hp(int)
+var default_max_hp: int = 10 # until you replicate max_hp
+
 func configure(_player_scene: PackedScene) -> void:
 	player_scene = _player_scene
 
 func clear() -> void:
-	# free any remaining puppet nodes we own references to
 	for k in puppets.keys():
 		var n: Node3D = puppets[k]
 		if n and is_instance_valid(n):
@@ -23,6 +26,7 @@ func clear() -> void:
 	puppets.clear()
 	local_player = null
 	local_camera = null
+	hp_by_peer.clear()
 
 func set_local_peer_id(id: int) -> void:
 	local_peer_id = id
@@ -54,12 +58,14 @@ func despawn_player(owner: Node, world: ClientWorld, peer_id: int) -> void:
 			n.queue_free()
 		puppets.erase(key)
 
-	# also remove from scene if present
 	var players := world.get_players_root(owner)
 	if players:
 		var existing := players.get_node_or_null(key)
 		if existing:
 			existing.queue_free()
+
+	# optionally keep hp cache (fine either way). I'd keep it for a bit:
+	# hp_by_peer.erase(peer_id)
 
 func apply_snapshots(snaps: Array) -> void:
 	for d in snaps:
@@ -74,19 +80,33 @@ func try_activate_local_camera(owner: Node, world: ClientWorld) -> void:
 
 	var key := str(local_peer_id)
 
-	# Prefer our puppet cache
 	if puppets.has(key) and is_instance_valid(puppets[key]):
 		_force_camera_current(puppets[key])
 		return
 
-	# Or look it up in the scene
 	var players := world.get_players_root(owner)
 	if players:
 		var n := players.get_node_or_null(key)
 		if n:
 			_force_camera_current(n)
 
-# --- internals ---
+# ---------------- vitals ----------------
+
+func set_player_hp(peer_id: int, hp: int) -> void:
+	hp_by_peer[int(peer_id)] = int(hp)
+
+	var n := _get_player_node(peer_id)
+	if n and n.has_method("set_hp"):
+		# max_hp not replicated yet; use default for display
+		n.call("set_hp", int(hp), default_max_hp)
+
+# ---------------- internals ----------------
+
+func _get_player_node(peer_id: int) -> Node3D:
+	var key := str(peer_id)
+	if puppets.has(key) and is_instance_valid(puppets[key]):
+		return puppets[key]
+	return null
 
 func _spawn_or_update(owner: Node, world: ClientWorld, peer_id: int, character_id: int, name: String, xform: Transform3D, yaw: float) -> void:
 	var players := world.get_players_root(owner)
@@ -125,6 +145,14 @@ func _spawn_or_update(owner: Node, world: ClientWorld, peer_id: int, character_i
 			n.call("server_init", character_id)
 		if not name.is_empty() and n.has_method("set_player_name"):
 			n.call("set_player_name", name)
+
+		# Apply cached HP if we already received it
+		if hp_by_peer.has(peer_id) and n.has_method("set_hp"):
+			n.call("set_hp", int(hp_by_peer[peer_id]), default_max_hp)
+		else:
+			# Optional: initialize to full until server tells us otherwise
+			if created and n.has_method("set_hp"):
+				n.call("set_hp", default_max_hp, default_max_hp)
 
 func _apply_state(peer_id: int, xform: Transform3D, yaw: float) -> void:
 	var key := str(peer_id)
