@@ -23,3 +23,7 @@ res://player/player.gd
 res://client/api/ClientMaps.gd
 res://client/api/ClientCharacters.gd
 res://client/api/ClientAuth.gd
+res://realm/services/RealmSessions.gd
+res://realm/services/InstanceRegistry.gd
+res://realm/services/ZoneSupervisor.gd
+res://realm/services/ApiGateway.gd
