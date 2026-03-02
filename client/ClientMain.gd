@@ -434,6 +434,11 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_break_target(target_id: int) -> void:
 	combat_view.break_target(target_id)
+	
+@rpc("authority", "unreliable")
+func s_target_snapshots(snaps: Array) -> void:
+	watchdog.mark_packet()
+	combat_view.target_snapshots(snaps)
 
 # ---- Pattern B envelope ----
 @rpc("authority", "reliable")

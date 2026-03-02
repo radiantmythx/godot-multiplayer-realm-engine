@@ -91,3 +91,10 @@ func break_target(target_id: int) -> void:
 		if n and is_instance_valid(n):
 			n.queue_free()
 		target_nodes.erase(key)
+
+func target_snapshots(snaps: Array) -> void:
+	for d in snaps:
+		var id := str(int(d.get("id", 0)))
+		var pos: Vector3 = d.get("pos", Vector3.ZERO)
+		if target_nodes.has(id) and is_instance_valid(target_nodes[id]):
+			target_nodes[id].global_position = pos

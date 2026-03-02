@@ -19,6 +19,7 @@ var log_f: FileAccess = null
 var snapshot_timer: Timer
 var projectile_timer: Timer
 var heartbeat_timer: Timer
+var target_snap_timer: Timer
 
 var spawned_test_monsters := false
 var _quitting := false
@@ -68,6 +69,13 @@ func _ready() -> void:
 	projectiles = ProjectileSystem.new()
 	projectiles.log = func(m): _log(m)
 	add_child(projectiles)
+
+	target_snap_timer = Timer.new()
+	target_snap_timer.wait_time = 1.0 / 15.0
+	target_snap_timer.one_shot = false
+	target_snap_timer.timeout.connect(_broadcast_target_snapshots)
+	add_child(target_snap_timer)
+	target_snap_timer.start()
 
 	combat = CombatResolver.new()
 	combat.log = func(m): _log(m)
@@ -127,7 +135,7 @@ func _ready() -> void:
 	add_child(snapshot_timer)
 	snapshot_timer.start()
 
-	# projectile timer
+	# projectile timer (also drives AI right now)
 	projectile_timer = Timer.new()
 	projectile_timer.wait_time = 1.0 / 60.0
 	projectile_timer.one_shot = false
@@ -158,6 +166,7 @@ func _graceful_shutdown(_reason: String) -> void:
 	if heartbeat_timer: heartbeat_timer.stop()
 	if snapshot_timer: snapshot_timer.stop()
 	if projectile_timer: projectile_timer.stop()
+	if target_snap_timer: target_snap_timer.stop()
 
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
@@ -225,7 +234,7 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 	# spawn “test monsters” once per zone
 	if not spawned_test_monsters:
 		spawned_test_monsters = true
-		var spawned = monsters.spawn_test_monsters() # legacy name ok
+		var spawned = monsters.spawn_test_monsters()
 		for s in spawned:
 			for pid in multiplayer.get_peers():
 				rpc_id(pid, "s_spawn_target", int(s.id), s.xform, int(s.hp))
@@ -266,6 +275,20 @@ func _broadcast_snapshots() -> void:
 	for p in peers:
 		rpc_id(p, "s_apply_snapshots", out)
 
+func _broadcast_target_snapshots() -> void:
+	var peers := multiplayer.get_peers()
+	if peers.is_empty():
+		return
+	if not monsters or not monsters.has_monsters():
+		return
+
+	var snaps := monsters.build_snapshot_list()
+	if snaps.is_empty():
+		return
+
+	for pid in peers:
+		rpc_id(pid, "s_target_snapshots", snaps)
+
 func _broadcast_combat_events(events: Array, peers: Array) -> void:
 	if events.is_empty():
 		return
@@ -298,7 +321,7 @@ func _broadcast_combat_events(events: Array, peers: Array) -> void:
 			_:
 				pass
 
-# ---------------- Projectiles ----------------
+# ---------------- Projectiles + AI ----------------
 
 func _tick_projectiles() -> void:
 	var peers := multiplayer.get_peers()
@@ -307,7 +330,19 @@ func _tick_projectiles() -> void:
 
 	var dt := projectile_timer.wait_time
 
-	# Build generic hurtboxes (players + monsters)
+	# --- AI tick (aggro/chase/melee) ---
+	if monsters:
+		var ai_events: Array = monsters.tick_ai(dt, players)
+		if ai_events.size() > 0:
+			_log("[ZONE] ai_events=" + str(ai_events)) # DEBUG: remove later
+
+			if combat and combat.has_method("resolve_ai_events"):
+				var cev: Array = combat.call("resolve_ai_events", ai_events)
+				if cev.size() > 0:
+					_log("[ZONE] combat_events=" + str(cev)) # DEBUG: remove later
+					_broadcast_combat_events(cev, peers)
+
+	# --- Projectiles ---
 	var hurtboxes: Array = []
 	if players and players.has_method("get_hurtboxes"):
 		hurtboxes.append_array(players.call("get_hurtboxes"))

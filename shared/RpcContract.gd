@@ -128,6 +128,10 @@ func s_player_hp(_peer_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_player_died(_peer_id: int) -> void:
 	pass
+	
+@rpc("authority", "unreliable")
+func s_target_snapshots(_snaps: Array) -> void:
+	pass
 
 # ---------------- Realm <-> Client (generic lobby gateway) ----------------
 

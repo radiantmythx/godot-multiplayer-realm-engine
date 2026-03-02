@@ -16,14 +16,6 @@ func configure(_monsters: MonsterSystem, _players: ZonePlayers) -> void:
 	monsters = _monsters
 	players = _players
 
-# Input: hits = Array[{proj_id:int, kind:String, id:int, owner:int?}]
-# Output events ZoneServer can broadcast.
-# Monster events:
-#  - {"type":"target_hp", "id":int, "hp":int}
-#  - {"type":"break_target", "id":int}
-# Player events:
-#  - {"type":"player_hp", "peer_id":int, "hp":int}
-#  - {"type":"player_died", "peer_id":int}
 func resolve_projectile_hits(hits: Array) -> Array:
 	var events: Array = []
 	if hits.is_empty():
@@ -32,51 +24,59 @@ func resolve_projectile_hits(hits: Array) -> Array:
 	for h in hits:
 		var kind := str(h.get("kind", ""))
 		var id := int(h.get("id", 0))
-		var owner := int(h.get("owner", 0))
+		var _owner := int(h.get("owner", 0))
 
 		match kind:
 			"monster":
 				if not monsters:
 					continue
-
 				var r := monsters.apply_damage(id, projectile_damage)
 
 				if bool(r.get("exists", false)):
-					events.append({
-						"type": "target_hp",
-						"id": id,
-						"hp": int(r.get("hp", 0)),
-					})
-
+					events.append({"type":"target_hp","id":id,"hp":int(r.get("hp", 0))})
 				if bool(r.get("died", false)):
-					events.append({
-						"type": "break_target",
-						"id": id,
-					})
+					events.append({"type":"break_target","id":id})
 
 			"player":
 				if not players:
 					continue
-
-				# Optional: if you added owner to hit payload, you can prevent friendly fire here later.
-
 				var r := players.apply_damage(id, projectile_damage)
 				if not bool(r.get("exists", false)):
 					continue
 
-				events.append({
-					"type": "player_hp",
-					"peer_id": id,
-					"hp": int(r.get("hp", 0)),
-				})
-
+				events.append({"type":"player_hp","peer_id":id,"hp":int(r.get("hp", 0))})
 				if bool(r.get("died", false)):
-					events.append({
-						"type": "player_died",
-						"peer_id": id,
-					})
+					events.append({"type":"player_died","peer_id":id})
 
 			_:
 				pass
 
 	return events
+
+func resolve_ai_events(ai_events: Array) -> Array:
+	var out: Array = []
+	if ai_events.is_empty():
+		return out
+	if not players:
+		return out
+
+	for e in ai_events:
+		var t := str(e.get("type", ""))
+		match t:
+			"melee_hit":
+				var target := int(e.get("target_peer", 0))
+				if target <= 0:
+					continue
+
+				var r := players.apply_damage(target, 1)
+				if not bool(r.get("exists", false)):
+					continue
+
+				out.append({"type":"player_hp","peer_id":target,"hp":int(r.get("hp", 0))})
+				if bool(r.get("died", false)):
+					out.append({"type":"player_died","peer_id":target})
+
+			_:
+				pass
+
+	return out
