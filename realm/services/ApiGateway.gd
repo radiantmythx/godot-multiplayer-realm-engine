@@ -75,8 +75,11 @@ func char_create(peer_id: int, jwt: String, name: String, class_id: String) -> v
 		"Name": name.strip_edges(),
 		"ClassId": class_id.strip_edges()
 	})
-	enqueue(peer_id, "char_create", url, HTTPClient.METHOD_POST, body,
-		_bearer(jwt) + ["Content-Type: application/json"])
+
+	var headers: Array[String] = _bearer(jwt) # typed
+	headers.append("Content-Type: application/json; charset=utf-8")
+
+	enqueue(peer_id, "char_create", url, HTTPClient.METHOD_POST, body, headers)
 
 func char_delete(peer_id: int, jwt: String, id: int) -> void:
 	var url := "%s/api/characters/%d" % [api_base, id]

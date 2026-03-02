@@ -393,6 +393,20 @@ func s_despawn_player(peer_id: int) -> void:
 func s_apply_snapshots(snaps: Array) -> void:
 	watchdog.mark_packet()
 	players_view.apply_snapshots(snaps)
+	
+@rpc("authority", "reliable")
+func s_player_hp(peer_id: int, hp: int) -> void:
+	# For now, just log. Later: update UI health bars.
+	# Only trust server.
+	ProcLog.lines(["[CLIENT] player_hp peer=", peer_id, " hp=", hp])
+
+@rpc("authority", "reliable")
+func s_player_died(peer_id: int) -> void:
+	ProcLog.lines(["[CLIENT] player_died peer=", peer_id])
+
+	# If *you* died, immediately go back to lobby (your requested behavior)
+	if peer_id == local_peer_id:
+		back_to_lobby()
 
 # ---- projectiles ----
 @rpc("authority", "reliable")

@@ -120,6 +120,14 @@ func s_target_hp(_target_id: int, _hp: int) -> void:
 @rpc("authority", "reliable")
 func s_break_target(_target_id: int) -> void:
 	pass
+	
+@rpc("authority", "reliable")
+func s_player_hp(_peer_id: int, _hp: int) -> void:
+	pass
+
+@rpc("authority", "reliable")
+func s_player_died(_peer_id: int) -> void:
+	pass
 
 # ---------------- Realm <-> Client (generic lobby gateway) ----------------
 

@@ -11,7 +11,7 @@ var ticket_secret: String = "dev_secret_change_me"
 
 @export var player_scene: PackedScene
 @export var projectile_scene: PackedScene
-@export var target_scene: PackedScene
+@export var target_scene: PackedScene # NOTE: keep for now (monster scene). Rename later when you’re ready.
 
 var log_file_path := ""
 var log_f: FileAccess = null
@@ -20,15 +20,16 @@ var snapshot_timer: Timer
 var projectile_timer: Timer
 var heartbeat_timer: Timer
 
-var spawned_test_targets := false
+var spawned_test_monsters := false
 var _quitting := false
 
 # modules
 var world: ZoneWorld
 var realm_link: ZoneRealmLink
 var players: ZonePlayers
-var targets: TargetSystem
+var monsters: MonsterSystem
 var projectiles: ProjectileSystem
+var combat: CombatResolver
 
 func _log(msg: String) -> void:
 	ProcLog.lines([msg])
@@ -60,13 +61,18 @@ func _ready() -> void:
 	players.log = func(m): _log(m)
 	add_child(players)
 
-	targets = TargetSystem.new()
-	targets.log = func(m): _log(m)
-	add_child(targets)
+	monsters = MonsterSystem.new()
+	monsters.log = func(m): _log(m)
+	add_child(monsters)
 
 	projectiles = ProjectileSystem.new()
 	projectiles.log = func(m): _log(m)
 	add_child(projectiles)
+
+	combat = CombatResolver.new()
+	combat.log = func(m): _log(m)
+	add_child(combat)
+	combat.configure(monsters, players)
 
 	# Start ENet server for clients
 	var peer := ENetMultiplayerPeer.new()
@@ -87,14 +93,14 @@ func _ready() -> void:
 
 	# configure systems that need world roots
 	players.configure(player_scene, world.players_root)
-	targets.configure(target_scene, world.world_root)
+	monsters.configure(target_scene, world.world_root) # still using target_scene for now
 	projectiles.configure(projectile_scene, world.world_root)
 
 	realm_link.connect_to_realm("127.0.0.1", realm_port)
 
 	var deadline_ms := Time.get_ticks_msec() + 1500
 	while not realm_link.realm_tcp_connected() and Time.get_ticks_msec() < deadline_ms:
-		realm_link.poll() # drives StreamPeerTCP state machine
+		realm_link.poll()
 		await get_tree().process_frame
 
 	if realm_link.realm_tcp_connected():
@@ -138,7 +144,6 @@ func _notification(what: int) -> void:
 		_graceful_shutdown("window_close")
 
 func _exit_tree() -> void:
-	# best-effort on any exit path
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
 
@@ -157,7 +162,6 @@ func _graceful_shutdown(_reason: String) -> void:
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
 
-	# give TCP a moment to flush (best-effort)
 	await get_tree().create_timer(0.05).timeout
 	get_tree().quit()
 
@@ -196,9 +200,11 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 		rpc_id(peer_id, "s_join_rejected", "wrong_character")
 		multiplayer.disconnect_peer(peer_id)
 		return
+
 	var character_name := str(payload.get("character_name", ""))
 	if character_name.is_empty():
 		character_name = "Player"
+
 	var spawn_xform := world.get_next_spawn_transform()
 	players.add_peer(peer_id, character_id, character_name, spawn_xform)
 
@@ -207,23 +213,27 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 		"you_peer_id": peer_id
 	})
 
+	# send existing players to the joiner
 	rpc_id(peer_id, "s_spawn_players_bulk", players.build_spawn_bulk_list())
 
+	# announce joiner to everyone else
 	for pid2 in multiplayer.get_peers():
 		if pid2 == peer_id:
 			continue
 		rpc_id(pid2, "s_spawn_player", peer_id, character_id, character_name, spawn_xform)
 
-	if not spawned_test_targets:
-		spawned_test_targets = true
-		var spawned := targets.spawn_test_targets()
+	# spawn “test monsters” once per zone
+	if not spawned_test_monsters:
+		spawned_test_monsters = true
+		var spawned = monsters.spawn_test_monsters() # legacy name ok
 		for s in spawned:
 			for pid in multiplayer.get_peers():
 				rpc_id(pid, "s_spawn_target", int(s.id), s.xform, int(s.hp))
 
-	for tinfo in targets.get_target_snapshot_list():
+	# send current monsters to the joiner (late join support)
+	for tinfo in monsters.get_monster_snapshot_list():
 		rpc_id(peer_id, "s_spawn_target", int(tinfo.id), tinfo.xform, int(tinfo.hp))
-		
+
 @rpc("any_peer", "reliable")
 func c_leave_zone() -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -256,33 +266,69 @@ func _broadcast_snapshots() -> void:
 	for p in peers:
 		rpc_id(p, "s_apply_snapshots", out)
 
+func _broadcast_combat_events(events: Array, peers: Array) -> void:
+	if events.is_empty():
+		return
+
+	for e in events:
+		var t := str(e.get("type", ""))
+		match t:
+			"target_hp":
+				var tid := int(e.get("id", 0))
+				var hp := int(e.get("hp", 0))
+				for pid in peers:
+					rpc_id(pid, "s_target_hp", tid, hp)
+
+			"break_target":
+				var tid := int(e.get("id", 0))
+				for pid in peers:
+					rpc_id(pid, "s_break_target", tid)
+
+			"player_hp":
+				var ppeer := int(e.get("peer_id", 0))
+				var php := int(e.get("hp", 0))
+				for pid in peers:
+					rpc_id(pid, "s_player_hp", ppeer, php)
+
+			"player_died":
+				var ppeer := int(e.get("peer_id", 0))
+				for pid in peers:
+					rpc_id(pid, "s_player_died", ppeer)
+
+			_:
+				pass
+
 # ---------------- Projectiles ----------------
 
 func _tick_projectiles() -> void:
+	var peers := multiplayer.get_peers()
+	if peers.is_empty():
+		return
+
 	var dt := projectile_timer.wait_time
-	var result := projectiles.tick(dt, targets.get_targets())
+
+	# Build generic hurtboxes (players + monsters)
+	var hurtboxes: Array = []
+	if players and players.has_method("get_hurtboxes"):
+		hurtboxes.append_array(players.call("get_hurtboxes"))
+	if monsters and monsters.has_method("get_hurtboxes"):
+		hurtboxes.append_array(monsters.call("get_hurtboxes"))
+
+	var result := projectiles.tick(dt, hurtboxes)
 
 	var snaps: Array = result.snaps
 	var despawn: Array = result.despawn
 	var hits: Array = result.hits
 
-	for h in hits:
-		var tid := int(h.target_id)
-		var r := targets.apply_damage(tid, 1)
-
-		if r.exists:
-			for pid in multiplayer.get_peers():
-				rpc_id(pid, "s_target_hp", tid, int(r.hp))
-		elif r.broke:
-			for pid in multiplayer.get_peers():
-				rpc_id(pid, "s_break_target", tid)
+	if combat and hits.size() > 0:
+		_broadcast_combat_events(combat.resolve_projectile_hits(hits), peers)
 
 	if snaps.size() > 0:
-		for pid in multiplayer.get_peers():
+		for pid in peers:
 			rpc_id(pid, "s_projectile_snapshots", snaps)
 
 	for proj_id in despawn:
-		for pid in multiplayer.get_peers():
+		for pid in peers:
 			rpc_id(pid, "s_despawn_projectile", int(proj_id))
 
 @rpc("any_peer", "reliable")
@@ -310,7 +356,8 @@ func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	if spawn.is_empty():
 		return
 
-	for pid in multiplayer.get_peers():
+	var peers := multiplayer.get_peers()
+	for pid in peers:
 		rpc_id(pid, "s_spawn_projectile", int(spawn.proj_id), int(spawn.owner), spawn.px, spawn.vel)
 
 # ---------------- Args ----------------

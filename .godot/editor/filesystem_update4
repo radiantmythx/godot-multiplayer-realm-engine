@@ -31,3 +31,8 @@ res://client/services/ClientSession.gd
 res://client/services/ClientConnection.gd
 res://client/services/ClientZoneWatchdog.gd
 res://client/services/ClientGameplay.gd
+res://zone/combat/MonsterSystem.gd
+res://zone/combat/TargetSystem.gd
+res://zone/combat/ProjectileSystem.gd
+res://zone/combat/CombatResolver.gd
+res://zone/combat/PlayerVitals.gd

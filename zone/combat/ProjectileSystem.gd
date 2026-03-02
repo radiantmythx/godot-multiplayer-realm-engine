@@ -49,8 +49,8 @@ func fire(owner_peer: int, player_xform: Transform3D, dir: Vector3) -> Dictionar
 	var px := Transform3D(Basis.IDENTITY, spawn_pos)
 	return {"proj_id": proj_id, "owner": owner_peer, "px": px, "vel": vel}
 
-func tick(dt: float, targets: Dictionary) -> Dictionary:
-	# returns {snaps:Array, despawn:Array[int], hits:Array[{proj_id,target_id}]}
+func tick(dt: float, hurtboxes: Array) -> Dictionary:
+	# returns {snaps:Array, despawn:Array[int], hits:Array[{proj_id,kind,id}]}
 	if projectiles.is_empty():
 		return {"snaps": [], "despawn": [], "hits": []}
 
@@ -67,9 +67,15 @@ func tick(dt: float, targets: Dictionary) -> Dictionary:
 		var new_pos := pos + vel * dt
 		ttl -= dt
 
-		var hit_target_id := _projectile_hit_target(pos, new_pos, targets)
-		if hit_target_id != 0:
-			hits.append({"proj_id": int(proj_id), "target_id": int(hit_target_id)})
+		# Hit test against generic hurtboxes (players + monsters, etc)
+		var hit := _projectile_hit(pos, new_pos, hurtboxes, int(p.owner))
+		if not hit.is_empty():
+			hits.append({
+				"proj_id": int(proj_id),
+				"kind": str(hit.kind),
+				"id": int(hit.id),
+				"owner": int(p.owner),
+			})
 			to_despawn.append(proj_id)
 			continue
 
@@ -91,24 +97,34 @@ func tick(dt: float, targets: Dictionary) -> Dictionary:
 		snaps.append({"id": int(proj_id), "pos": new_pos})
 
 	# cleanup server debug nodes for despawns
-	for proj_id in to_despawn:
-		projectiles.erase(proj_id)
-		if projectile_nodes.has(proj_id):
-			var n: Node3D = projectile_nodes[proj_id]
-			if n and is_instance_valid(n):
-				n.queue_free()
-			projectile_nodes.erase(proj_id)
+	for did in to_despawn:
+		projectiles.erase(did)
+		if projectile_nodes.has(did):
+			var dn: Node3D = projectile_nodes[did]
+			if dn and is_instance_valid(dn):
+				dn.queue_free()
+			projectile_nodes.erase(did)
 
 	return {"snaps": snaps, "despawn": to_despawn, "hits": hits}
 
-func _projectile_hit_target(a: Vector3, b: Vector3, targets: Dictionary) -> int:
-	for tid in targets.keys():
-		var t: Dictionary = targets[tid]
-		var center: Vector3 = (t.xform as Transform3D).origin
-		var r: float = float(t.radius)
+func _projectile_hit(a: Vector3, b: Vector3, hurtboxes: Array, owner_peer: int) -> Dictionary:
+	for hb in hurtboxes:
+		# hb is a Dictionary-like object: {kind,id,xform,radius}
+		var kind := str(hb.get("kind", ""))
+		var id := int(hb.get("id", 0))
+
+		# Optional: ignore self-hit for player-owned projectiles
+		if kind == "player" and id == owner_peer:
+			continue
+
+		var xform: Transform3D = hb.get("xform", Transform3D.IDENTITY)
+		var center: Vector3 = xform.origin
+		var r: float = float(hb.get("radius", 0.6))
+
 		if _segment_sphere(a, b, center, r):
-			return int(tid)
-	return 0
+			return {"kind": kind, "id": id}
+
+	return {}
 
 func _segment_sphere(a: Vector3, b: Vector3, c: Vector3, r: float) -> bool:
 	var ab := b - a

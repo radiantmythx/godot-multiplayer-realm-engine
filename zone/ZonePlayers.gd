@@ -10,9 +10,18 @@ var players_root: Node = null
 # peer_id -> { character_id:int, name:String, xform:Transform3D, target:Vector3, yaw:float }
 var players_by_peer: Dictionary = {}
 
+# vitals live in their own module for easy extension
+var vitals: PlayerVitals
+
 func configure(_player_scene: PackedScene, _players_root: Node) -> void:
 	player_scene = _player_scene
 	players_root = _players_root
+
+	# Create vitals as a child module (once)
+	if vitals == null:
+		vitals = PlayerVitals.new()
+		vitals.log = func(m): log.call("[VITALS] " + str(m))
+		add_child(vitals)
 
 func has_peer(peer_id: int) -> bool:
 	return players_by_peer.has(peer_id)
@@ -22,6 +31,9 @@ func get_player_count() -> int:
 
 func remove_peer(peer_id: int) -> void:
 	players_by_peer.erase(peer_id)
+	if vitals:
+		vitals.remove_peer(peer_id)
+
 	var n := players_root.get_node_or_null(str(peer_id)) if players_root else null
 	if n:
 		n.queue_free()
@@ -34,6 +46,10 @@ func add_peer(peer_id: int, character_id: int, character_name: String, xform: Tr
 		"target": xform.origin,
 		"yaw": 0.0,
 	}
+
+	# init vitals
+	if vitals:
+		vitals.init_peer(peer_id, 10) # tune later / from DB
 
 	# optional server-side node
 	if players_root and is_instance_valid(players_root) and player_scene:
@@ -67,6 +83,24 @@ func get_player_xform(peer_id: int) -> Transform3D:
 		return Transform3D.IDENTITY
 	var st: Dictionary = players_by_peer[peer_id]
 	return st.get("xform", Transform3D.IDENTITY)
+
+# ---------------- Vitals pass-through ----------------
+
+func apply_damage(peer_id: int, dmg: int) -> Dictionary:
+	if not vitals:
+		return {"exists": false, "hp": 0, "died": false}
+	return vitals.apply_damage(peer_id, dmg)
+
+func get_hp(peer_id: int) -> int:
+	return vitals.get_hp(peer_id) if vitals else 0
+
+func is_alive(peer_id: int) -> bool:
+	return vitals.is_alive(peer_id) if vitals else true
+
+func build_vitals_bulk_list() -> Array:
+	return vitals.build_vitals_bulk_list() if vitals else []
+
+# ---------------- Replication helpers ----------------
 
 func build_spawn_bulk_list() -> Array:
 	var snapshot_list: Array = []
@@ -118,4 +152,20 @@ func simulate(dt: float, speed: float) -> Array:
 			"yaw": float(st.get("yaw", 0.0)),
 		})
 
+	return out
+
+func get_hurtboxes() -> Array:
+	var out: Array = []
+	for pid in players_by_peer.keys():
+		# Optional: don't allow hits on dead players
+		if vitals and not vitals.is_alive(int(pid)):
+			continue
+
+		var st: Dictionary = players_by_peer[pid]
+		out.append({
+			"kind": "player",
+			"id": int(pid),
+			"xform": st.get("xform", Transform3D.IDENTITY),
+			"radius": 0.6, # tune later
+		})
 	return out
