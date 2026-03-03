@@ -6,14 +6,18 @@ var port: int
 var instance_id: int
 var map_id: String
 var seed: int
+
+# Realm internal TCP link (Zone -> Realm)
+var realm_host: String = "127.0.0.1"
 var realm_port: int = 4001
+
 var ticket_secret: String = "dev_secret_change_me"
 
 @export var player_scene: PackedScene
 @export var projectile_scene: PackedScene
 @export var target_scene: PackedScene # temporary default monster debug scene (server-side optional)
 
-# NEW: single registry
+# single registry
 @export var monster_db: MonsterDatabase
 
 var log_file_path := ""
@@ -35,11 +39,13 @@ var monsters: MonsterSystem
 var projectiles: ProjectileSystem
 var combat: CombatResolver
 
+
 func _log(msg: String) -> void:
 	ProcLog.lines([msg])
 	if log_f:
 		log_f.store_line(msg)
 		log_f.flush()
+
 
 func _ready() -> void:
 	_parse_args()
@@ -49,7 +55,9 @@ func _ready() -> void:
 		_log("[ZONE] Logging to " + log_file_path)
 
 	_log("[ZONE] args: " + str(OS.get_cmdline_args()))
-	_log("[ZONE] parsed port=%d instance_id=%d map=%s seed=%d realm_port=%d" % [port, instance_id, map_id, seed, realm_port])
+	_log("[ZONE] parsed port=%d instance_id=%d map=%s seed=%d realm_host=%s realm_port=%d" % [
+		port, instance_id, map_id, seed, realm_host, realm_port
+	])
 
 	# create modules
 	world = ZoneWorld.new()
@@ -113,7 +121,8 @@ func _ready() -> void:
 
 	projectiles.configure(projectile_scene, world.world_root)
 
-	realm_link.connect_to_realm("127.0.0.1", realm_port)
+	# Connect to Realm internal TCP (configurable host)
+	realm_link.connect_to_realm(realm_host, realm_port)
 
 	var deadline_ms := Time.get_ticks_msec() + 1500
 	while not realm_link.realm_tcp_connected() and Time.get_ticks_msec() < deadline_ms:
@@ -160,20 +169,25 @@ func _ready() -> void:
 	add_child(monster_snap_timer)
 	monster_snap_timer.start()
 
+
 func _process(_dt: float) -> void:
 	realm_link.poll()
+
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_log("[ZONE] WM_CLOSE_REQUEST")
 		_graceful_shutdown("window_close")
 
+
 func _exit_tree() -> void:
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
 
+
 func _on_realm_shutdown_requested(reason: String) -> void:
 	_graceful_shutdown("realm_request:" + reason)
+
 
 func _graceful_shutdown(_reason: String) -> void:
 	if _quitting:
@@ -191,6 +205,7 @@ func _graceful_shutdown(_reason: String) -> void:
 	await get_tree().create_timer(0.05).timeout
 	get_tree().quit()
 
+
 # ---------------- Client connections ----------------
 
 func _on_client_connected(id: int) -> void:
@@ -203,6 +218,7 @@ func _on_client_disconnected(id: int) -> void:
 
 	for pid in multiplayer.get_peers():
 		rpc_id(pid, "s_despawn_player", id)
+
 
 # ---------------- Join / auth ----------------
 
@@ -274,6 +290,7 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 			int(minfo.max_hp)
 		)
 
+
 @rpc("any_peer", "reliable")
 func c_leave_zone() -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -285,12 +302,14 @@ func c_leave_zone() -> void:
 
 	multiplayer.disconnect_peer(peer_id)
 
+
 # ---------------- Movement ----------------
 
 @rpc("any_peer", "unreliable")
 func c_set_move_target(world_pos: Vector3) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
 	players.set_move_target(peer_id, world_pos)
+
 
 # ---------------- Snapshot replication ----------------
 
@@ -306,6 +325,7 @@ func _broadcast_snapshots() -> void:
 	for p in peers:
 		rpc_id(p, "s_apply_snapshots", out)
 
+
 func _broadcast_monster_snapshots() -> void:
 	var peers := multiplayer.get_peers()
 	if peers.is_empty():
@@ -319,6 +339,7 @@ func _broadcast_monster_snapshots() -> void:
 
 	for pid in peers:
 		rpc_id(pid, "s_monster_snapshots", snaps)
+
 
 func _broadcast_combat_events(events: Array, peers: Array) -> void:
 	if events.is_empty():
@@ -355,6 +376,7 @@ func _broadcast_combat_events(events: Array, peers: Array) -> void:
 
 			_:
 				pass
+
 
 # ---------------- Projectiles + AI ----------------
 
@@ -394,6 +416,7 @@ func _tick_projectiles() -> void:
 		for pid in peers:
 			rpc_id(pid, "s_despawn_projectile", int(proj_id))
 
+
 @rpc("any_peer", "reliable")
 func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -423,32 +446,51 @@ func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	for pid in peers:
 		rpc_id(pid, "s_spawn_projectile", int(spawn.proj_id), int(spawn.owner), spawn.px, spawn.vel)
 
+
 # ---------------- Args ----------------
 
 func _parse_args() -> void:
-	var args := OS.get_cmdline_user_args()
-	if args.is_empty():
-		args = OS.get_cmdline_args()
+	# Read both user args and engine args (same as your client/realm behavior)
+	var engine_args := OS.get_cmdline_args()
+	var user_args := OS.get_cmdline_user_args()
+
+	var args: Array = []
+	args.append_array(user_args)
+	args.append_array(engine_args)
 
 	for a in args:
-		if a.begins_with("--port="):
-			port = int(a.get_slice("=", 1))
-		elif a.begins_with("--instance_id="):
-			instance_id = int(a.get_slice("=", 1))
-		elif a.begins_with("--map_id="):
-			map_id = a.get_slice("=", 1)
-		elif a.begins_with("--seed="):
-			seed = int(a.get_slice("=", 1))
-		elif a.begins_with("--realm_port="):
-			realm_port = int(a.get_slice("=", 1))
-		elif a.begins_with("--ticket_secret="):
-			ticket_secret = a.get_slice("=", 1)
-		elif a.begins_with("--log_file=") or a.begins_with("--log="):
-			log_file_path = a.get_slice("=", 1)
+		if typeof(a) != TYPE_STRING:
+			continue
+		var s: String = a
+
+		# accept both --key=value and key=value for convenience
+		if s.begins_with("--"):
+			s = s.substr(2)
+
+		if s.begins_with("port="):
+			port = int(s.get_slice("=", 1))
+		elif s.begins_with("instance_id="):
+			instance_id = int(s.get_slice("=", 1))
+		elif s.begins_with("map_id="):
+			map_id = s.get_slice("=", 1)
+		elif s.begins_with("seed="):
+			seed = int(s.get_slice("=", 1))
+
+		# internal tcp target (Zone -> Realm)
+		elif s.begins_with("realm_host="):
+			realm_host = s.get_slice("=", 1).strip_edges()
+		elif s.begins_with("realm_port="):
+			realm_port = int(s.get_slice("=", 1))
+
+		elif s.begins_with("ticket_secret="):
+			ticket_secret = s.get_slice("=", 1)
+
+		elif s.begins_with("log_file=") or s.begins_with("log="):
+			log_file_path = s.get_slice("=", 1)
 
 	if port <= 0:
-		push_error("[ZONE] Missing --port")
+		push_error("[ZONE] Missing --port / port=")
 	if instance_id <= 0:
-		push_error("[ZONE] Missing --instance_id")
+		push_error("[ZONE] Missing --instance_id / instance_id=")
 	if map_id.is_empty():
-		push_error("[ZONE] Missing --map_id")
+		push_error("[ZONE] Missing --map_id / map_id=")

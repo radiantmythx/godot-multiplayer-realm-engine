@@ -7,7 +7,7 @@ extends RpcContract
 # Fallback monster scene (optional)
 @export var target_scene: PackedScene
 
-# NEW: single registry shared with server (can be same .tres)
+# single registry shared with server (can be same .tres)
 @export var monster_db: MonsterDatabase
 
 # travel state
@@ -39,12 +39,23 @@ var last_zone_list: Array = []
 
 signal lobby_response(kind: String, ok: bool, payload: Dictionary)
 
+# NEW: launch-configurable realm target (defaults stay localhost)
+var launch_realm_host: String = "127.0.0.1"
+var launch_realm_port: int = 1909
+
+# NEW: if true, override "localhost-ish" travel.host with launch_realm_host
+var override_zone_host_with_realm_host: bool = true
+
+
 func _ready() -> void:
 	set_process_input(true)
 	ProcLog.lines(["[CLIENT] path: ", get_path()])
 	ProcLog.lines(["[CLIENT] rpc root name=", name, " path=", get_path()])
 
 	add_to_group("client_main")
+
+	# Parse args BEFORE connecting
+	_parse_launch_network_args()
 
 	# modules
 	net = ClientNet.new()
@@ -135,9 +146,82 @@ func _ready() -> void:
 			login_ui.call("set_authed", true, account_id, username)
 	)
 
-	# Connect to Realm immediately
-	conn.set_realm("127.0.0.1", 1909)
+	# Connect to Realm immediately (now uses parsed args)
+	ProcLog.lines(["[CLIENT] Connecting to Realm @ ", launch_realm_host, ":", launch_realm_port])
+	conn.set_realm(launch_realm_host, launch_realm_port)
 	conn.connect_realm()
+
+
+# -------------------------
+# Launch arg parsing
+# -------------------------
+
+func _parse_launch_network_args() -> void:
+	# Support both:
+	#   --realm_host=1.2.3.4 --realm_port=1909 --override_zone_host=false
+	# and:
+	#   realm_host=1.2.3.4 realm_port=1909 override_zone_host=false
+	var engine_args := OS.get_cmdline_args()
+	var user_args := OS.get_cmdline_user_args()
+
+	var all_args: Array = []
+	all_args.append_array(user_args)
+	all_args.append_array(engine_args)
+
+	var host := _extract_arg_any(all_args, ["--realm_host=", "realm_host="])
+	var port_str := _extract_arg_any(all_args, ["--realm_port=", "realm_port="])
+	var ov_str := _extract_arg_any(all_args, ["--override_zone_host=", "override_zone_host="])
+
+	# Optional convenience: --realm=ip:port or realm=ip:port
+	var realm_combo := _extract_arg_any(all_args, ["--realm=", "realm="])
+	if not realm_combo.is_empty():
+		var parts := realm_combo.split(":")
+		if parts.size() >= 1 and not parts[0].strip_edges().is_empty():
+			host = parts[0].strip_edges()
+		if parts.size() >= 2:
+			port_str = parts[1].strip_edges()
+
+	if not host.is_empty():
+		launch_realm_host = host.strip_edges()
+
+	if not port_str.is_empty():
+		var p := int(port_str)
+		if p > 0:
+			launch_realm_port = p
+
+	if not ov_str.is_empty():
+		override_zone_host_with_realm_host = _parse_bool(ov_str, true)
+
+	ProcLog.lines([
+		"[CLIENT] launch args -> realm_host=", launch_realm_host,
+		" realm_port=", launch_realm_port,
+		" override_zone_host=", str(override_zone_host_with_realm_host)
+	])
+
+
+func _extract_arg_any(args: Array, prefixes: Array[String]) -> String:
+	for a in args:
+		if typeof(a) != TYPE_STRING:
+			continue
+		var s: String = a
+		for pref in prefixes:
+			if s.begins_with(pref):
+				return s.get_slice("=", 1)
+	return ""
+
+
+func _parse_bool(s: String, default_val: bool) -> bool:
+	var v := s.strip_edges().to_lower()
+	if v in ["1", "true", "yes", "y", "on"]:
+		return true
+	if v in ["0", "false", "no", "n", "off"]:
+		return false
+	return default_val
+
+
+# -------------------------
+# Auth + input
+# -------------------------
 
 func begin_with_token(token: String, account_id: int, username: String) -> void:
 	session.set_token(token, account_id, username)
@@ -281,7 +365,10 @@ func back_to_lobby() -> void:
 	conn.disconnect_current()
 
 	session.set_realm_authed(false)
-	conn.set_realm("127.0.0.1", 1909)
+
+	# Reconnect to Realm using the launch target (NOT hardcoded localhost anymore)
+	ProcLog.lines(["[CLIENT] Reconnecting to Realm @ ", launch_realm_host, ":", launch_realm_port])
+	conn.set_realm(launch_realm_host, launch_realm_port)
 	conn.connect_realm()
 
 	if is_instance_valid(login_ui):
@@ -317,9 +404,18 @@ func s_create_zone_failed(reason: String) -> void:
 func s_travel_to_zone(travel: Dictionary) -> void:
 	ProcLog.lines(["[CLIENT] Travel order: ", travel])
 
-	current_zone_host = travel.host
-	current_zone_port = int(travel.port)
-	current_join_ticket = travel.join_ticket
+	var host := str(travel.host)
+	var port := int(travel.port)
+
+	# NEW: fix travel host for external clients
+	if override_zone_host_with_realm_host:
+		if host in ["127.0.0.1", "localhost", "0.0.0.0", ""]:
+			ProcLog.lines(["[CLIENT] Overriding zone host ", host, " -> ", launch_realm_host])
+			host = launch_realm_host
+
+	current_zone_host = host
+	current_zone_port = port
+	current_join_ticket = str(travel.join_ticket)
 
 	players_view.clear()
 	combat_view.clear()

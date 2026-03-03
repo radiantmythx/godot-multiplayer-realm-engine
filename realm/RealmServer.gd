@@ -1,10 +1,10 @@
 extends RpcContract
 class_name RealmServer
 
-const REALM_PORT := 1909
+const REALM_PORT_DEFAULT := 1909
 const ZONE_PORT_START := 1910
 const ZONE_PORT_END := 1950
-const INTERNAL_TCP_PORT := 4001
+const INTERNAL_TCP_PORT_DEFAULT := 4001
 
 const HUB_MAP_ID := "res://maps/HubMap.tscn"
 const ZONE_EXE_REL := "ZoneServer" # kept for future; not used in editor runs
@@ -14,8 +14,20 @@ const ZONE_HEARTBEAT_TIMEOUT := 6 # seconds
 var ticket_secret: String = "dev_secret_change_me"
 var jwt_secret: String = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
 
-# API proxy
+# API proxy (Realm -> API)
 var api_base := "http://127.0.0.1:5131"
+
+# --- networking config (parsed from args) ---
+var realm_port: int = REALM_PORT_DEFAULT
+
+# What the Realm tells clients to use when connecting to Zones.
+# For local dev: default = 127.0.0.1
+# For friends: set to your public IP or DNS (e.g. myrealm.ddns.net)
+var public_host: String = "127.0.0.1"
+
+# Internal TCP for zones -> realm (default local-only)
+var internal_tcp_host: String = "127.0.0.1"
+var internal_tcp_port: int = INTERNAL_TCP_PORT_DEFAULT
 
 # --- services ---
 var sessions: RealmSessions
@@ -23,8 +35,18 @@ var registry: InstanceRegistry
 var zones: ZoneSupervisor
 var api: ApiGateway
 
+
 func _ready() -> void:
 	ProcLog.lines(["[REALM] path: " + str(get_path())])
+
+	_parse_args()
+
+	ProcLog.lines([
+		"[REALM] config realm_port=", realm_port,
+		" public_host=", public_host,
+		" internal_tcp=", internal_tcp_host, ":", internal_tcp_port,
+		" api_base=", api_base
+	])
 
 	# --- build services ---
 	sessions = RealmSessions.new()
@@ -71,12 +93,12 @@ func _ready() -> void:
 
 	# --- Start ENet for clients ---
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(REALM_PORT, 128)
+	var err := peer.create_server(realm_port, 128)
 	if err != OK:
 		push_error("Realm ENet create_server failed: %s" % err)
 		return
 	multiplayer.multiplayer_peer = peer
-	ProcLog.lines(["[REALM] ENet listening on ", REALM_PORT])
+	ProcLog.lines(["[REALM] ENet listening on ", realm_port])
 
 	multiplayer.peer_connected.connect(func(id):
 		ProcLog.lines(["[REALM] client connected: ", id])
@@ -88,21 +110,80 @@ func _ready() -> void:
 		api.remove_peer(id)
 	)
 
-	# --- Start internal TCP server for zones (localhost) ---
-	var err2 := zones.start_tcp(INTERNAL_TCP_PORT, "127.0.0.1")
+	# --- Start internal TCP server for zones ---
+	var err2 := zones.start_tcp(internal_tcp_port, internal_tcp_host)
 	if err2 != OK:
 		push_error("Realm TCP listen failed: %s" % err2)
 		return
-	ProcLog.lines(["[REALM] Internal TCP listening on 127.0.0.1:", INTERNAL_TCP_PORT])
+	ProcLog.lines(["[REALM] Internal TCP listening on ", internal_tcp_host, ":", internal_tcp_port])
+
 
 func _process(_dt: float) -> void:
 	zones.tick()
 	registry.prune_dead_instances()
 
+
+# -------------------------
+# Arg parsing (same vibe as AppMain)
+# -------------------------
+
+func _parse_args() -> void:
+	var engine_args := OS.get_cmdline_args()
+	var user_args := OS.get_cmdline_user_args()
+
+	var all_args: Array = []
+	all_args.append_array(user_args)
+	all_args.append_array(engine_args)
+
+	# realm_port (optional override)
+	var rp := _extract_arg_any(all_args, ["--realm_port=", "realm_port="])
+	if not rp.is_empty():
+		var p := int(rp)
+		if p > 0:
+			realm_port = p
+
+	# public_host controls what we put in travel.host
+	var ph := _extract_arg_any(all_args, ["--public_host=", "public_host="])
+	if not ph.is_empty():
+		public_host = ph.strip_edges()
+
+	# api_base (optional)
+	var ab := _extract_arg_any(all_args, ["--api_base=", "api_base="])
+	if not ab.is_empty():
+		api_base = ab.strip_edges()
+
+	# internal tcp host/port (optional)
+	var ith := _extract_arg_any(all_args, ["--internal_tcp_host=", "internal_tcp_host="])
+	if not ith.is_empty():
+		internal_tcp_host = ith.strip_edges()
+
+	var itp := _extract_arg_any(all_args, ["--internal_tcp_port=", "internal_tcp_port="])
+	if not itp.is_empty():
+		var tp := int(itp)
+		if tp > 0:
+			internal_tcp_port = tp
+
+
+func _extract_arg_any(args: Array, prefixes: Array[String]) -> String:
+	for a in args:
+		if typeof(a) != TYPE_STRING:
+			continue
+		var s: String = a
+		for pref in prefixes:
+			if s.begins_with(pref):
+				return s.get_slice("=", 1)
+	return ""
+
+
+# -------------------------
+# Instance lifecycle
+# -------------------------
+
 func _on_instance_dead(instance_id: int) -> void:
 	# idempotent: removing twice is fine
 	ProcLog.lines(["[REALM] Instance DEAD instance=", instance_id])
 	registry.remove_instance(instance_id)
+
 
 # ---------------- RPCs: Client -> Realm ----------------
 
@@ -121,11 +202,13 @@ func c_authenticate(jwt: String) -> void:
 
 	rpc_id(peer_id, "s_auth_ok", { "account_id": int(result.account_id), "username": str(result.username) })
 
+
 @rpc("any_peer", "reliable")
 func c_request_zone_list() -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
 	var zones_list := registry.get_public_zone_list()
 	rpc_id(peer_id, "s_zone_list", zones_list)
+
 
 @rpc("any_peer", "reliable")
 func c_request_create_zone(map_id: String, seed: int, capacity: int) -> void:
@@ -145,6 +228,7 @@ func c_request_create_zone(map_id: String, seed: int, capacity: int) -> void:
 
 	# return updated list
 	c_request_zone_list()
+
 
 @rpc("any_peer", "reliable")
 func c_request_enter_instance(instance_id: int, character_id: int, character_name: String) -> void:
@@ -181,14 +265,17 @@ func c_request_enter_instance(instance_id: int, character_id: int, character_nam
 	}
 	var token := Ticket.issue(ticket_secret, payload)
 
+	# IMPORTANT: send public_host to clients, not localhost,
+	# so friends can connect to spawned zones.
 	rpc_id(peer_id, "s_travel_to_zone", {
-		"host": "127.0.0.1", # TODO: public IP / DNS when hosting for friends
+		"host": public_host,
 		"port": int(inst.port),
 		"instance_id": int(inst.instance_id),
 		"map_id": str(inst.map_id),
 		"seed": int(inst.seed),
 		"join_ticket": token
 	})
+
 
 # ---------------- Pattern B lobby gateway ----------------
 
