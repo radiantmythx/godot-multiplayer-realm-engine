@@ -39,3 +39,14 @@ res://zone/combat/PlayerVitals.gd
 res://client/modules/ClientCombatView.gd
 res://player/HealthBar3D.gd
 res://client/modules/ClientPlayersView.gd
+res://zone/combat/monsters/MonsterData.gd
+res://zone/combat/monsters/MonsterSystem.gd
+res://data/monsters/BlueSlime.tres
+res://data/monsters/Goblin.tres
+res://Slime.tscn
+res://Goblin.tscn
+res://data/monster_db/MonsterEntry.gd
+res://data/monster_db/MonsterDatabase.gd
+res://data/MonsterDatabase.tres
+res://data/monsters/slime/Slime.tscn
+res://data/monsters/goblin/Goblin.tscn

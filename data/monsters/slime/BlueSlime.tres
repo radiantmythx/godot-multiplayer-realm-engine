@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="MonsterData" load_steps=2 format=3 uid="uid://c8s12tt5p6fto"]
+
+[ext_resource type="Script" uid="uid://pqop6w23bbrb" path="res://zone/combat/monsters/MonsterData.gd" id="1_dxq0d"]
+
+[resource]
+script = ExtResource("1_dxq0d")
+type_id = "slime_blue"
+display_name = "Blue Slime"
+max_hp = 5
+tint = Color(0, 0.78491, 0.788743, 1)
+aggro_radius = 10.0
+move_speed = 1.0
+melee_range = 1.5
+melee_cooldown = 1.0
+melee_damage = 1
+metadata/_custom_type_script = "uid://pqop6w23bbrb"

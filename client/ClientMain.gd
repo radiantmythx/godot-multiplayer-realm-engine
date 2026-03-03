@@ -3,7 +3,12 @@ extends RpcContract
 
 @export var player_scene: PackedScene
 @export var projectile_scene: PackedScene
+
+# Fallback monster scene (optional)
 @export var target_scene: PackedScene
+
+# NEW: single registry shared with server (can be same .tres)
+@export var monster_db: MonsterDatabase
 
 # travel state
 var current_join_ticket := ""
@@ -21,7 +26,7 @@ var combat_view: ClientCombatView
 var aim: ClientAim
 var input: ClientInput
 
-# services (new)
+# services
 var session: ClientSession
 var conn: ClientConnection
 var watchdog: ClientZoneWatchdog
@@ -30,10 +35,8 @@ var gameplay: ClientGameplay
 @export var login_screen_scene: PackedScene
 var login_ui: Control
 
-# lobby state
 var last_zone_list: Array = []
 
-# Pattern B: generic lobby envelope
 signal lobby_response(kind: String, ok: bool, payload: Dictionary)
 
 func _ready() -> void:
@@ -43,9 +46,7 @@ func _ready() -> void:
 
 	add_to_group("client_main")
 
-	# -------------------------
-	# Build existing modules
-	# -------------------------
+	# modules
 	net = ClientNet.new()
 	net.log = func(m): ProcLog.lines([m])
 	add_child(net)
@@ -61,7 +62,17 @@ func _ready() -> void:
 
 	combat_view = ClientCombatView.new()
 	combat_view.log = func(m): ProcLog.lines([m])
-	combat_view.configure(projectile_scene, target_scene)
+
+	# Build type -> scene map from MonsterDatabase
+	var monster_map: Dictionary = {}
+	if monster_db:
+		monster_db.validate(func(m): ProcLog.lines([m]))
+		monster_map = monster_db.build_scene_map(func(m): ProcLog.lines([m]))
+	else:
+		ProcLog.lines(["[CLIENT] WARNING: monster_db not assigned; using fallback only"])
+
+	# Default falls back to target_scene if a type isn't mapped yet
+	combat_view.configure(projectile_scene, target_scene, monster_map)
 	add_child(combat_view)
 
 	aim = ClientAim.new()
@@ -71,9 +82,7 @@ func _ready() -> void:
 	input.log = func(m): ProcLog.lines([m])
 	add_child(input)
 
-	# -------------------------
-	# Build services
-	# -------------------------
+	# services
 	session = ClientSession.new()
 	add_child(session)
 
@@ -91,16 +100,13 @@ func _ready() -> void:
 	add_child(gameplay)
 	gameplay.configure(players_view, aim, input)
 
-	# -------------------------
 	# Wire service signals
-	# -------------------------
 	conn.realm_connected.connect(_on_realm_connected)
 	conn.zone_connected.connect(_on_zone_connected)
 	conn.realm_lost.connect(_on_realm_lost)
 	conn.zone_lost.connect(_on_zone_lost)
 
 	watchdog.timeout.connect(func(reason: String):
-		# only matters if we're currently in zone
 		if conn.conn_kind == ClientConnection.ConnKind.ZONE:
 			_on_zone_lost(reason)
 	)
@@ -115,9 +121,7 @@ func _ready() -> void:
 		rpc_id(1, "c_fire_projectile", from, dir)
 	)
 
-	# -------------------------
 	# UI
-	# -------------------------
 	if login_screen_scene == null:
 		push_error("[CLIENT] login_screen_scene not assigned on ClientMain.tscn!")
 		return
@@ -125,48 +129,34 @@ func _ready() -> void:
 	login_ui = login_screen_scene.instantiate()
 	add_child(login_ui)
 
-	# LoginScreen must have signal login_success(token, account_id, username)
 	login_ui.login_success.connect(func(token: String, account_id: int, username: String):
 		begin_with_token(token, account_id, username)
 		if login_ui.has_method("set_authed"):
 			login_ui.call("set_authed", true, account_id, username)
 	)
 
-	# Connect to Realm immediately (Option B: Realm is gateway)
+	# Connect to Realm immediately
 	conn.set_realm("127.0.0.1", 1909)
 	conn.connect_realm()
 
-# Called by LoginScreen after Realm-gateway auth succeeds
 func begin_with_token(token: String, account_id: int, username: String) -> void:
 	session.set_token(token, account_id, username)
-
 	ProcLog.lines(["[CLIENT] begin_with_token account=", account_id, " user=", username])
 
-	# If already connected to Realm, authenticate now.
-	# If not connected yet, _on_realm_connected will authenticate when it does connect.
 	if conn.conn_kind == ClientConnection.ConnKind.REALM and conn.peer_connected():
 		_send_realm_authenticate()
 
-# -------------------------
-# Realm auth
-# -------------------------
 func _send_realm_authenticate() -> void:
 	session.set_realm_authed(false)
 
 	if not session.has_token():
-		# Not logged in yet; OK in Option B (stay connected to realm)
 		return
 
 	ProcLog.lines(["[CLIENT] Sending c_authenticate to Realm..."])
 	rpc_id(1, "c_authenticate", session.jwt_token)
 
-# -------------------------
-# Input / tick
-# -------------------------
 func _input(event: InputEvent) -> void:
-	# gameplay only when in-zone + connected
 	if conn.conn_kind != ClientConnection.ConnKind.ZONE:
-		# still allow ESC to go back
 		if event.is_action_pressed("ui_cancel"):
 			back_to_lobby()
 		return
@@ -183,9 +173,7 @@ func _process(dt: float) -> void:
 
 	gameplay.tick(dt)
 
-# -------------------------
 # Net callbacks
-# -------------------------
 func _on_realm_connected() -> void:
 	ProcLog.lines(["[CLIENT] Realm connected"])
 	_send_realm_authenticate()
@@ -202,7 +190,6 @@ func _on_zone_connected() -> void:
 
 func _on_realm_lost(reason: String) -> void:
 	session.set_realm_authed(false)
-
 	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
 		login_ui.call("set_status", "Realm connection lost: " + reason)
 
@@ -222,9 +209,7 @@ func _on_zone_lost(reason: String) -> void:
 	if is_instance_valid(login_ui) and login_ui.has_method("set_status"):
 		login_ui.call("set_status", "Zone disconnected (" + reason + "). Back in lobby.")
 
-# -------------------------
-# Lobby helper methods (called by LoginScreen/Lobby UI)
-# -------------------------
+# Lobby helpers
 func request_zone_list() -> void:
 	if conn.conn_kind != ClientConnection.ConnKind.REALM:
 		return
@@ -260,7 +245,6 @@ func request_join_instance(instance_id: int, character_id: int, character_name: 
 	rpc_id(1, "c_request_enter_instance", instance_id, character_id, safe_name)
 
 func lobby_request(kind: String, payload: Dictionary) -> void:
-	# Pattern B: generic lobby request envelope (Realm is our gateway)
 	if conn.conn_kind != ClientConnection.ConnKind.REALM:
 		return
 	if not conn.peer_connected():
@@ -270,7 +254,6 @@ func lobby_request(kind: String, payload: Dictionary) -> void:
 func back_to_lobby() -> void:
 	ProcLog.lines(["[CLIENT] Back to lobby requested"])
 
-	# If already connected to Realm, just show UI and refresh
 	if conn.conn_kind == ClientConnection.ConnKind.REALM:
 		if is_instance_valid(login_ui):
 			login_ui.visible = true
@@ -279,11 +262,9 @@ func back_to_lobby() -> void:
 		request_zone_list()
 		return
 
-	# Best-effort tell the ZONE you’re leaving (only if still connected)
 	if conn.conn_kind == ClientConnection.ConnKind.ZONE and conn.peer_connected():
 		rpc_id(1, "c_leave_zone")
 
-	# Clear world visuals/state
 	local_peer_id = 0
 	current_join_ticket = ""
 	current_zone_host = ""
@@ -297,10 +278,8 @@ func back_to_lobby() -> void:
 	if world and world.has_method("unload_world"):
 		world.call("unload_world")
 
-	# Disconnect whatever is current (zone or half-dead)
 	conn.disconnect_current()
 
-	# Reconnect to realm (dev default)
 	session.set_realm_authed(false)
 	conn.set_realm("127.0.0.1", 1909)
 	conn.connect_realm()
@@ -311,14 +290,13 @@ func back_to_lobby() -> void:
 			login_ui.call("set_status", "Connecting to Realm...")
 
 # -------------------------
-# RPCs (stay here for checksum safety)
+# RPCs (checksum safe)
 # -------------------------
+
 @rpc("authority", "reliable")
 func s_auth_ok(data: Dictionary) -> void:
 	session.set_realm_authed(true)
 	ProcLog.lines(["[CLIENT] Realm auth ok: ", data])
-
-	# Now that we're authed, populate lobby.
 	if conn.conn_kind == ClientConnection.ConnKind.REALM and conn.peer_connected():
 		rpc_id(1, "c_request_zone_list")
 
@@ -326,7 +304,6 @@ func s_auth_ok(data: Dictionary) -> void:
 func s_zone_list(zones: Array) -> void:
 	last_zone_list = zones
 	ProcLog.lines(["[CLIENT] zone_list count=", zones.size()])
-
 	if is_instance_valid(login_ui) and login_ui.has_method("set_zone_list"):
 		login_ui.call("set_zone_list", zones)
 
@@ -349,7 +326,6 @@ func s_travel_to_zone(travel: Dictionary) -> void:
 
 	world.load_world(self, str(travel.map_id))
 
-	# swap from realm to zone
 	conn.disconnect_current()
 	conn.set_zone(current_zone_host, current_zone_port)
 	conn.connect_zone()
@@ -393,23 +369,8 @@ func s_despawn_player(peer_id: int) -> void:
 func s_apply_snapshots(snaps: Array) -> void:
 	watchdog.mark_packet()
 	players_view.apply_snapshots(snaps)
-	
-@rpc("authority", "reliable")
-func s_player_hp(peer_id: int, hp: int) -> void:
-	# For now, just log. Later: update UI health bars.
-	# Only trust server.
-	ProcLog.lines(["[CLIENT] player_hp peer=", peer_id, " hp=", hp])
-	players_view.set_player_hp(peer_id, hp)
 
-@rpc("authority", "reliable")
-func s_player_died(peer_id: int) -> void:
-	ProcLog.lines(["[CLIENT] player_died peer=", peer_id])
-
-	# If *you* died, immediately go back to lobby (your requested behavior)
-	if peer_id == local_peer_id:
-		back_to_lobby()
-
-# ---- projectiles ----
+# Projectiles
 @rpc("authority", "reliable")
 func s_spawn_projectile(proj_id: int, _owner_peer: int, xform: Transform3D, _vel: Vector3) -> void:
 	combat_view.spawn_projectile(self, world, proj_id, xform)
@@ -423,33 +384,42 @@ func s_projectile_snapshots(snaps: Array) -> void:
 func s_despawn_projectile(proj_id: int) -> void:
 	combat_view.despawn_projectile(proj_id)
 
-# ---- targets ----
+# Monsters
 @rpc("authority", "reliable")
-func s_spawn_target(target_id: int, xform: Transform3D, _hp: int) -> void:
-	combat_view.spawn_target(self, world, target_id, xform)
+func s_spawn_monster(monster_id: int, type_id: String, name: String, xform: Transform3D, hp: int, max_hp: int) -> void:
+	combat_view.spawn_monster(self, world, monster_id, type_id, name, xform, hp, max_hp)
 
-@rpc("authority", "reliable")
-func s_target_hp(_target_id: int, _hp: int) -> void:
-	pass
-
-@rpc("authority", "reliable")
-func s_break_target(target_id: int) -> void:
-	combat_view.break_target(target_id)
-	
 @rpc("authority", "unreliable")
-func s_target_snapshots(snaps: Array) -> void:
+func s_monster_snapshots(snaps: Array) -> void:
 	watchdog.mark_packet()
-	combat_view.target_snapshots(snaps)
+	combat_view.monster_snapshots(snaps)
 
-# ---- Pattern B envelope ----
+@rpc("authority", "reliable")
+func s_monster_hp(monster_id: int, hp: int, max_hp: int) -> void:
+	combat_view.monster_hp(monster_id, hp, max_hp)
+
+@rpc("authority", "reliable")
+func s_break_monster(monster_id: int) -> void:
+	combat_view.break_monster(monster_id)
+
+# Player vitals
+@rpc("authority", "reliable")
+func s_player_hp(peer_id: int, hp: int) -> void:
+	players_view.set_player_hp(peer_id, hp)
+
+@rpc("authority", "reliable")
+func s_player_died(peer_id: int) -> void:
+	ProcLog.lines(["[CLIENT] player_died peer=", peer_id])
+	if peer_id == local_peer_id:
+		back_to_lobby()
+
+# Lobby envelope
 @rpc("authority", "reliable")
 func s_lobby_response(kind: String, ok: bool, payload: Dictionary) -> void:
 	ProcLog.lines(["[CLIENT] lobby_response kind=", kind, " ok=", ok])
 	emit_signal("lobby_response", kind, ok, payload)
 
-# -------------------------
-# client -> server intents
-# -------------------------
+# Client -> Zone intents
 func send_move_target(world_pos: Vector3) -> void:
 	if conn.conn_kind != ClientConnection.ConnKind.ZONE:
 		return

@@ -1,0 +1,15 @@
+[gd_scene load_steps=3 format=3 uid="uid://ceogokybun3ul"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_6xce0"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_r0bjo"]
+albedo_color = Color(0.495269, 0.813057, 0.225787, 1)
+metallic = 0.65
+metallic_specular = 0.26
+roughness = 0.65
+
+[node name="TargetRoot" type="Node3D"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("CapsuleMesh_6xce0")
+surface_material_override/0 = SubResource("StandardMaterial3D_r0bjo")

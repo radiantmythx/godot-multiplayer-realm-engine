@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="MonsterData" load_steps=2 format=3 uid="uid://dtgu3s8nkq5s8"]
+
+[ext_resource type="Script" uid="uid://pqop6w23bbrb" path="res://zone/combat/monsters/MonsterData.gd" id="1_xksa3"]
+
+[resource]
+script = ExtResource("1_xksa3")
+type_id = "goblin_green"
+display_name = "Goblin"
+max_hp = 10
+tint = Color(0, 0.78491, 0.788743, 1)
+aggro_radius = 10.0
+move_speed = 3.5
+melee_range = 1.5
+melee_cooldown = 1.0
+melee_damage = 1
+metadata/_custom_type_script = "uid://pqop6w23bbrb"

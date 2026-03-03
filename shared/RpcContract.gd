@@ -142,3 +142,19 @@ func c_lobby_request(_kind: String, _payload: Dictionary) -> void:
 @rpc("authority", "reliable")
 func s_lobby_response(_kind: String, _ok: bool, _payload: Dictionary) -> void:
 	pass
+
+@rpc("authority", "reliable")
+func s_spawn_monster(_monster_id: int, _type_id: String, _name: String, _xform: Transform3D, _hp: int, _max_hp: int) -> void:
+	pass
+
+@rpc("authority", "unreliable")
+func s_monster_snapshots(_snaps: Array) -> void:
+	pass
+
+@rpc("authority", "reliable")
+func s_monster_hp(_monster_id: int, _hp: int, _max_hp: int) -> void:
+	pass
+
+@rpc("authority", "reliable")
+func s_break_monster(_monster_id: int) -> void:
+	pass

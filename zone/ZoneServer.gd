@@ -11,7 +11,10 @@ var ticket_secret: String = "dev_secret_change_me"
 
 @export var player_scene: PackedScene
 @export var projectile_scene: PackedScene
-@export var target_scene: PackedScene # NOTE: keep for now (monster scene). Rename later when you’re ready.
+@export var target_scene: PackedScene # temporary default monster debug scene (server-side optional)
+
+# NEW: single registry
+@export var monster_db: MonsterDatabase
 
 var log_file_path := ""
 var log_f: FileAccess = null
@@ -19,7 +22,7 @@ var log_f: FileAccess = null
 var snapshot_timer: Timer
 var projectile_timer: Timer
 var heartbeat_timer: Timer
-var target_snap_timer: Timer
+var monster_snap_timer: Timer
 
 var spawned_test_monsters := false
 var _quitting := false
@@ -70,17 +73,18 @@ func _ready() -> void:
 	projectiles.log = func(m): _log(m)
 	add_child(projectiles)
 
-	target_snap_timer = Timer.new()
-	target_snap_timer.wait_time = 1.0 / 15.0
-	target_snap_timer.one_shot = false
-	target_snap_timer.timeout.connect(_broadcast_target_snapshots)
-	add_child(target_snap_timer)
-	target_snap_timer.start()
-
 	combat = CombatResolver.new()
 	combat.log = func(m): _log(m)
 	add_child(combat)
 	combat.configure(monsters, players)
+
+	# Build monster catalog from MonsterDatabase
+	var catalog: Dictionary = {}
+	if monster_db:
+		monster_db.validate(func(m): _log(m))
+		catalog = monster_db.build_data_catalog(func(m): _log(m))
+	else:
+		_log("[ZONE] WARNING: monster_db not assigned; monsters will use fallback defaults")
 
 	# Start ENet server for clients
 	var peer := ENetMultiplayerPeer.new()
@@ -101,7 +105,12 @@ func _ready() -> void:
 
 	# configure systems that need world roots
 	players.configure(player_scene, world.players_root)
-	monsters.configure(target_scene, world.world_root) # still using target_scene for now
+
+	# Monsters:
+	# - target_scene is still used as the *server-side debug node* (optional)
+	# - catalog drives hp/name/ai stats
+	monsters.configure(target_scene, world.world_root, catalog)
+
 	projectiles.configure(projectile_scene, world.world_root)
 
 	realm_link.connect_to_realm("127.0.0.1", realm_port)
@@ -135,13 +144,21 @@ func _ready() -> void:
 	add_child(snapshot_timer)
 	snapshot_timer.start()
 
-	# projectile timer (also drives AI right now)
+	# projectile timer (also drives AI)
 	projectile_timer = Timer.new()
 	projectile_timer.wait_time = 1.0 / 60.0
 	projectile_timer.one_shot = false
 	projectile_timer.timeout.connect(_tick_projectiles)
 	add_child(projectile_timer)
 	projectile_timer.start()
+
+	# monster snapshots @ 15Hz
+	monster_snap_timer = Timer.new()
+	monster_snap_timer.wait_time = 1.0 / 15.0
+	monster_snap_timer.one_shot = false
+	monster_snap_timer.timeout.connect(_broadcast_monster_snapshots)
+	add_child(monster_snap_timer)
+	monster_snap_timer.start()
 
 func _process(_dt: float) -> void:
 	realm_link.poll()
@@ -166,7 +183,7 @@ func _graceful_shutdown(_reason: String) -> void:
 	if heartbeat_timer: heartbeat_timer.stop()
 	if snapshot_timer: snapshot_timer.stop()
 	if projectile_timer: projectile_timer.stop()
-	if target_snap_timer: target_snap_timer.stop()
+	if monster_snap_timer: monster_snap_timer.stop()
 
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
@@ -237,11 +254,25 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 		var spawned = monsters.spawn_test_monsters()
 		for s in spawned:
 			for pid in multiplayer.get_peers():
-				rpc_id(pid, "s_spawn_target", int(s.id), s.xform, int(s.hp))
+				rpc_id(pid, "s_spawn_monster",
+					int(s.id),
+					str(s.type_id),
+					str(s.name),
+					s.xform,
+					int(s.hp),
+					int(s.max_hp)
+				)
 
 	# send current monsters to the joiner (late join support)
-	for tinfo in monsters.get_monster_snapshot_list():
-		rpc_id(peer_id, "s_spawn_target", int(tinfo.id), tinfo.xform, int(tinfo.hp))
+	for minfo in monsters.get_monster_snapshot_list():
+		rpc_id(peer_id, "s_spawn_monster",
+			int(minfo.id),
+			str(minfo.type_id),
+			str(minfo.name),
+			minfo.xform,
+			int(minfo.hp),
+			int(minfo.max_hp)
+		)
 
 @rpc("any_peer", "reliable")
 func c_leave_zone() -> void:
@@ -275,7 +306,7 @@ func _broadcast_snapshots() -> void:
 	for p in peers:
 		rpc_id(p, "s_apply_snapshots", out)
 
-func _broadcast_target_snapshots() -> void:
+func _broadcast_monster_snapshots() -> void:
 	var peers := multiplayer.get_peers()
 	if peers.is_empty():
 		return
@@ -287,7 +318,7 @@ func _broadcast_target_snapshots() -> void:
 		return
 
 	for pid in peers:
-		rpc_id(pid, "s_target_snapshots", snaps)
+		rpc_id(pid, "s_monster_snapshots", snaps)
 
 func _broadcast_combat_events(events: Array, peers: Array) -> void:
 	if events.is_empty():
@@ -297,15 +328,19 @@ func _broadcast_combat_events(events: Array, peers: Array) -> void:
 		var t := str(e.get("type", ""))
 		match t:
 			"target_hp":
-				var tid := int(e.get("id", 0))
+				var mid := int(e.get("id", 0))
 				var hp := int(e.get("hp", 0))
+				var max_hp := 0
+				if monsters:
+					var m := monsters.get_monster(mid)
+					max_hp = int(m.get("max_hp", 0))
 				for pid in peers:
-					rpc_id(pid, "s_target_hp", tid, hp)
+					rpc_id(pid, "s_monster_hp", mid, hp, max_hp)
 
 			"break_target":
-				var tid := int(e.get("id", 0))
+				var mid := int(e.get("id", 0))
 				for pid in peers:
-					rpc_id(pid, "s_break_target", tid)
+					rpc_id(pid, "s_break_monster", mid)
 
 			"player_hp":
 				var ppeer := int(e.get("peer_id", 0))
@@ -330,19 +365,13 @@ func _tick_projectiles() -> void:
 
 	var dt := projectile_timer.wait_time
 
-	# --- AI tick (aggro/chase/melee) ---
+	# AI tick → resolve into player_hp/player_died
 	if monsters:
 		var ai_events: Array = monsters.tick_ai(dt, players)
-		if ai_events.size() > 0:
-			_log("[ZONE] ai_events=" + str(ai_events)) # DEBUG: remove later
+		if ai_events.size() > 0 and combat and combat.has_method("resolve_ai_events"):
+			_broadcast_combat_events(combat.call("resolve_ai_events", ai_events), peers)
 
-			if combat and combat.has_method("resolve_ai_events"):
-				var cev: Array = combat.call("resolve_ai_events", ai_events)
-				if cev.size() > 0:
-					_log("[ZONE] combat_events=" + str(cev)) # DEBUG: remove later
-					_broadcast_combat_events(cev, peers)
-
-	# --- Projectiles ---
+	# Projectiles
 	var hurtboxes: Array = []
 	if players and players.has_method("get_hurtboxes"):
 		hurtboxes.append_array(players.call("get_hurtboxes"))
@@ -350,7 +379,6 @@ func _tick_projectiles() -> void:
 		hurtboxes.append_array(monsters.call("get_hurtboxes"))
 
 	var result := projectiles.tick(dt, hurtboxes)
-
 	var snaps: Array = result.snaps
 	var despawn: Array = result.despawn
 	var hits: Array = result.hits

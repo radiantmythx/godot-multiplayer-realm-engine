@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="MonsterDatabase" load_steps=9 format=3 uid="uid://ctmvbx3khcuuh"]
+
+[ext_resource type="Script" uid="uid://de3gt32cf4nil" path="res://data/monster_db/MonsterEntry.gd" id="1_7ej7c"]
+[ext_resource type="Resource" uid="uid://c8s12tt5p6fto" path="res://data/monsters/slime/BlueSlime.tres" id="2_p8ug0"]
+[ext_resource type="Script" uid="uid://cblvg2i3nn2l" path="res://data/monster_db/MonsterDatabase.gd" id="2_udp88"]
+[ext_resource type="PackedScene" uid="uid://581u4mhk4e0i" path="res://data/monsters/slime/Slime.tscn" id="3_qucet"]
+[ext_resource type="Resource" uid="uid://dtgu3s8nkq5s8" path="res://data/monsters/goblin/Goblin.tres" id="4_5wa4c"]
+[ext_resource type="PackedScene" uid="uid://ceogokybun3ul" path="res://data/monsters/goblin/Goblin.tscn" id="5_gpcbw"]
+
+[sub_resource type="Resource" id="Resource_33b5y"]
+script = ExtResource("1_7ej7c")
+type_id = "slime_blue"
+data = ExtResource("2_p8ug0")
+scene = ExtResource("3_qucet")
+metadata/_custom_type_script = "uid://de3gt32cf4nil"
+
+[sub_resource type="Resource" id="Resource_p8ug0"]
+script = ExtResource("1_7ej7c")
+type_id = "goblin_green"
+data = ExtResource("4_5wa4c")
+scene = ExtResource("5_gpcbw")
+metadata/_custom_type_script = "uid://de3gt32cf4nil"
+
+[resource]
+script = ExtResource("2_udp88")
+entries = Array[ExtResource("1_7ej7c")]([SubResource("Resource_33b5y"), SubResource("Resource_p8ug0")])
+metadata/_custom_type_script = "uid://cblvg2i3nn2l"

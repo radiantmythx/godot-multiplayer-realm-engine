@@ -1,0 +1,15 @@
+[gd_scene load_steps=3 format=3 uid="uid://581u4mhk4e0i"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_hdxgk"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_d12es"]
+albedo_color = Color(0.412623, 0.768632, 0.882864, 1)
+metallic = 0.65
+metallic_specular = 0.26
+roughness = 0.3
+
+[node name="TargetRoot" type="Node3D"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_hdxgk")
+surface_material_override/0 = SubResource("StandardMaterial3D_d12es")
