@@ -7,7 +7,6 @@ var api_base: String = "http://127.0.0.1:5131"
 
 var http: HTTPRequest
 
-# Queue-based HTTP proxy (single in-flight)
 var _http_busy: bool = false
 var _http_queue: Array = []        # { peer_id, kind, url, method, body, headers:Array[String] }
 var _http_active: Dictionary = {}  # { peer_id, kind }
@@ -21,12 +20,9 @@ func set_api_base(base_url: String) -> void:
 	api_base = base_url
 
 func remove_peer(peer_id: int) -> void:
-	# prune queued jobs
 	_http_queue = _http_queue.filter(func(j):
 		return int(j.get("peer_id", 0)) != int(peer_id)
 	)
-
-	# if active belongs to them, drop it (can't cancel request, but can ignore completion)
 	if not _http_active.is_empty() and int(_http_active.get("peer_id", 0)) == int(peer_id):
 		_http_active.clear()
 
@@ -36,7 +32,7 @@ func _bearer(jwt: String) -> Array[String]:
 		"Authorization: Bearer " + jwt
 	]
 
-# ---- high-level helpers (match your lobby kinds) ----
+# ---- existing endpoints ----
 
 func auth_login(peer_id: int, username_or_email: String, password: String) -> void:
 	var url := "%s/api/auth/login" % api_base
@@ -65,6 +61,17 @@ func maps_list(peer_id: int, playable: bool, hidden: bool) -> void:
 	]
 	enqueue(peer_id, "maps_list", url, HTTPClient.METHOD_GET, "", ["Accept: application/json"])
 
+# NEW: convenient "list everything" for Realm internal lookup
+func maps_list_all(peer_id: int) -> void:
+	# playable=true, hidden=true -> returns everything in most APIs
+	var url := "%s/api/maps?playable=true&hidden=true" % api_base
+	enqueue(peer_id, "maps_list_all", url, HTTPClient.METHOD_GET, "", ["Accept: application/json"])
+
+# NEW: GET /api/maps/{id}/spawns
+func map_spawns(peer_id: int, map_id: int) -> void:
+	var url := "%s/api/maps/%d/spawns" % [api_base, int(map_id)]
+	enqueue(peer_id, "map_spawns", url, HTTPClient.METHOD_GET, "", ["Accept: application/json"])
+
 func chars_list(peer_id: int, jwt: String) -> void:
 	var url := "%s/api/characters" % api_base
 	enqueue(peer_id, "chars_list", url, HTTPClient.METHOD_GET, "", _bearer(jwt))
@@ -76,7 +83,7 @@ func char_create(peer_id: int, jwt: String, name: String, class_id: String) -> v
 		"ClassId": class_id.strip_edges()
 	})
 
-	var headers: Array[String] = _bearer(jwt) # typed
+	var headers: Array[String] = _bearer(jwt)
 	headers.append("Content-Type: application/json; charset=utf-8")
 
 	enqueue(peer_id, "char_create", url, HTTPClient.METHOD_POST, body, headers)
@@ -133,7 +140,6 @@ func _pump() -> void:
 		_pump()
 
 func _on_request_completed(_result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	# If we dropped active (disconnect), ignore completion and continue.
 	if _http_active.is_empty():
 		_http_busy = false
 		_pump()

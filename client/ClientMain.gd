@@ -303,14 +303,15 @@ func request_zone_list() -> void:
 		return
 	rpc_id(1, "c_request_zone_list")
 
-func request_create_zone(map_id: String, seed: int, capacity: int) -> void:
+func request_create_zone(map_id: int, scene_path: String, seed: int, capacity: int) -> void:
 	if conn.conn_kind != ClientConnection.ConnKind.REALM:
 		return
 	if not conn.peer_connected():
 		return
 	if not session.is_realm_authed:
 		return
-	rpc_id(1, "c_request_create_zone", map_id, seed, capacity)
+
+	rpc_id(1, "c_request_create_zone", map_id, scene_path, seed, capacity)
 
 func request_join_instance(instance_id: int, character_id: int, character_name: String) -> void:
 	if conn.conn_kind != ClientConnection.ConnKind.REALM:

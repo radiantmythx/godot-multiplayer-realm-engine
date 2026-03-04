@@ -7,6 +7,12 @@ var instance_id: int
 var map_id: String
 var seed: int
 
+# Spawn config passed from Realm
+# Prefer spawns_b64 (base64 JSON array), keep spawns_json for compatibility/testing.
+var spawns_json: String = ""
+var spawns_b64: String = ""
+var spawn_entries: Array = []
+
 # Realm internal TCP link (Zone -> Realm)
 var realm_host: String = "127.0.0.1"
 var realm_port: int = 4001
@@ -15,9 +21,8 @@ var ticket_secret: String = "dev_secret_change_me"
 
 @export var player_scene: PackedScene
 @export var projectile_scene: PackedScene
-@export var target_scene: PackedScene # temporary default monster debug scene (server-side optional)
+@export var target_scene: PackedScene # server-side debug node for monsters (optional)
 
-# single registry
 @export var monster_db: MonsterDatabase
 
 var log_file_path := ""
@@ -28,7 +33,7 @@ var projectile_timer: Timer
 var heartbeat_timer: Timer
 var monster_snap_timer: Timer
 
-var spawned_test_monsters := false
+var spawned_monsters_once := false
 var _quitting := false
 
 # modules
@@ -39,13 +44,11 @@ var monsters: MonsterSystem
 var projectiles: ProjectileSystem
 var combat: CombatResolver
 
-
 func _log(msg: String) -> void:
 	ProcLog.lines([msg])
 	if log_f:
 		log_f.store_line(msg)
 		log_f.flush()
-
 
 func _ready() -> void:
 	_parse_args()
@@ -55,9 +58,11 @@ func _ready() -> void:
 		_log("[ZONE] Logging to " + log_file_path)
 
 	_log("[ZONE] args: " + str(OS.get_cmdline_args()))
-	_log("[ZONE] parsed port=%d instance_id=%d map=%s seed=%d realm_host=%s realm_port=%d" % [
-		port, instance_id, map_id, seed, realm_host, realm_port
+	_log("[ZONE] parsed port=%d instance_id=%d map=%s seed=%d realm_host=%s realm_port=%d spawns_json_len=%d spawns_b64_len=%d" % [
+		port, instance_id, map_id, seed, realm_host, realm_port, spawns_json.length(), spawns_b64.length()
 	])
+
+	_decode_spawn_entries()
 
 	# create modules
 	world = ZoneWorld.new()
@@ -115,8 +120,7 @@ func _ready() -> void:
 	players.configure(player_scene, world.players_root)
 
 	# Monsters:
-	# - target_scene is still used as the *server-side debug node* (optional)
-	# - catalog drives hp/name/ai stats
+	# target_scene is server-side debug visual (optional); catalog drives stats
 	monsters.configure(target_scene, world.world_root, catalog)
 
 	projectiles.configure(projectile_scene, world.world_root)
@@ -169,25 +173,69 @@ func _ready() -> void:
 	add_child(monster_snap_timer)
 	monster_snap_timer.start()
 
+func _decode_spawn_entries() -> void:
+	spawn_entries = []
+
+	if not spawns_b64.is_empty():
+		var txt := _b64_to_utf8_safe(spawns_b64)
+		if txt.is_empty():
+			_log("[ZONE] WARNING: spawns_b64 decode failed; spawning 0 monsters")
+			return
+
+		var parsed = JSON.parse_string(txt)
+		if typeof(parsed) == TYPE_ARRAY:
+			spawn_entries = parsed
+			_log("[ZONE] parsed spawn_entries from spawns_b64 count=%d" % spawn_entries.size())
+		else:
+			_log("[ZONE] WARNING: spawns_b64 decoded but did not parse as Array type=%s txt=%s" % [str(typeof(parsed)), txt])
+		return
+
+	# fallback: direct json
+	if not spawns_json.is_empty():
+		var parsed2 = JSON.parse_string(spawns_json)
+		if typeof(parsed2) == TYPE_ARRAY:
+			spawn_entries = parsed2
+			_log("[ZONE] parsed spawn_entries from spawns_json count=%d" % spawn_entries.size())
+		else:
+			_log("[ZONE] WARNING: spawns_json did not parse as Array type=%s" % str(typeof(parsed2)))
+
+
+func _b64_to_utf8_safe(b64: String) -> String:
+	# First try Godot helper (best case)
+	var s := Marshalls.base64_to_utf8(b64)
+	if not s.is_empty():
+		return s
+
+	# Normalize URL-safe base64 -> standard base64
+	var norm := b64.replace("-", "+").replace("_", "/")
+
+	# Add padding if missing
+	var mod := norm.length() % 4
+	if mod == 2:
+		norm += "=="
+	elif mod == 3:
+		norm += "="
+	elif mod == 1:
+		# impossible/invalid base64 length
+		return ""
+
+	# Try again
+	return Marshalls.base64_to_utf8(norm)
 
 func _process(_dt: float) -> void:
 	realm_link.poll()
-
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_log("[ZONE] WM_CLOSE_REQUEST")
 		_graceful_shutdown("window_close")
 
-
 func _exit_tree() -> void:
 	if realm_link:
 		realm_link.send_shutdown(instance_id)
 
-
 func _on_realm_shutdown_requested(reason: String) -> void:
 	_graceful_shutdown("realm_request:" + reason)
-
 
 func _graceful_shutdown(_reason: String) -> void:
 	if _quitting:
@@ -205,7 +253,6 @@ func _graceful_shutdown(_reason: String) -> void:
 	await get_tree().create_timer(0.05).timeout
 	get_tree().quit()
 
-
 # ---------------- Client connections ----------------
 
 func _on_client_connected(id: int) -> void:
@@ -218,7 +265,6 @@ func _on_client_disconnected(id: int) -> void:
 
 	for pid in multiplayer.get_peers():
 		rpc_id(pid, "s_despawn_player", id)
-
 
 # ---------------- Join / auth ----------------
 
@@ -264,22 +310,12 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 			continue
 		rpc_id(pid2, "s_spawn_player", peer_id, character_id, character_name, spawn_xform)
 
-	# spawn “test monsters” once per zone
-	if not spawned_test_monsters:
-		spawned_test_monsters = true
-		var spawned = monsters.spawn_test_monsters()
-		for s in spawned:
-			for pid in multiplayer.get_peers():
-				rpc_id(pid, "s_spawn_monster",
-					int(s.id),
-					str(s.type_id),
-					str(s.name),
-					s.xform,
-					int(s.hp),
-					int(s.max_hp)
-				)
+	# Spawn monsters once per zone (on first join)
+	if not spawned_monsters_once:
+		spawned_monsters_once = true
+		_spawn_monsters_for_zone()
 
-	# send current monsters to the joiner (late join support)
+	# Late join support (send all current monsters)
 	for minfo in monsters.get_monster_snapshot_list():
 		rpc_id(peer_id, "s_spawn_monster",
 			int(minfo.id),
@@ -290,6 +326,40 @@ func c_join_instance(join_ticket: String, character_id: int) -> void:
 			int(minfo.max_hp)
 		)
 
+func _spawn_monsters_for_zone() -> void:
+	var spawned: Array = []
+
+	# Requirement: if no MonsterSpawner markers, spawn nothing.
+	var root := world.world_root
+	if root == null:
+		_log("[ZONE] No world_root; skipping monster spawn")
+		return
+
+	var spawners := root.get_node_or_null("MonsterSpawners")
+	if spawners == null:
+		_log("[ZONE] No MonsterSpawners node; spawning 0 monsters (as requested)")
+		return
+
+	# If we have markers but no spawn entries from API, we still spawn nothing.
+	if spawn_entries.is_empty():
+		_log("[ZONE] MonsterSpawners exists but spawn_entries empty; spawning 0 monsters")
+		return
+
+	# Delegate actual placement logic to MonsterSystem (uses Marker3Ds under MonsterSpawners)
+	spawned = monsters.spawn_from_map(root, spawn_entries, seed)
+	_log("[ZONE] spawn_from_map spawned=%d" % spawned.size())
+
+	# Replicate spawns to clients
+	for s in spawned:
+		for pid in multiplayer.get_peers():
+			rpc_id(pid, "s_spawn_monster",
+				int(s.id),
+				str(s.type_id),
+				str(s.name),
+				s.xform,
+				int(s.hp),
+				int(s.max_hp)
+			)
 
 @rpc("any_peer", "reliable")
 func c_leave_zone() -> void:
@@ -302,14 +372,12 @@ func c_leave_zone() -> void:
 
 	multiplayer.disconnect_peer(peer_id)
 
-
 # ---------------- Movement ----------------
 
 @rpc("any_peer", "unreliable")
 func c_set_move_target(world_pos: Vector3) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
 	players.set_move_target(peer_id, world_pos)
-
 
 # ---------------- Snapshot replication ----------------
 
@@ -325,7 +393,6 @@ func _broadcast_snapshots() -> void:
 	for p in peers:
 		rpc_id(p, "s_apply_snapshots", out)
 
-
 func _broadcast_monster_snapshots() -> void:
 	var peers := multiplayer.get_peers()
 	if peers.is_empty():
@@ -339,7 +406,6 @@ func _broadcast_monster_snapshots() -> void:
 
 	for pid in peers:
 		rpc_id(pid, "s_monster_snapshots", snaps)
-
 
 func _broadcast_combat_events(events: Array, peers: Array) -> void:
 	if events.is_empty():
@@ -376,7 +442,6 @@ func _broadcast_combat_events(events: Array, peers: Array) -> void:
 
 			_:
 				pass
-
 
 # ---------------- Projectiles + AI ----------------
 
@@ -416,7 +481,6 @@ func _tick_projectiles() -> void:
 		for pid in peers:
 			rpc_id(pid, "s_despawn_projectile", int(proj_id))
 
-
 @rpc("any_peer", "reliable")
 func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -446,11 +510,9 @@ func c_fire_projectile(_from: Vector3, dir: Vector3) -> void:
 	for pid in peers:
 		rpc_id(pid, "s_spawn_projectile", int(spawn.proj_id), int(spawn.owner), spawn.px, spawn.vel)
 
-
 # ---------------- Args ----------------
 
 func _parse_args() -> void:
-	# Read both user args and engine args (same as your client/realm behavior)
 	var engine_args := OS.get_cmdline_args()
 	var user_args := OS.get_cmdline_user_args()
 
@@ -463,7 +525,6 @@ func _parse_args() -> void:
 			continue
 		var s: String = a
 
-		# accept both --key=value and key=value for convenience
 		if s.begins_with("--"):
 			s = s.substr(2)
 
@@ -475,6 +536,12 @@ func _parse_args() -> void:
 			map_id = s.get_slice("=", 1)
 		elif s.begins_with("seed="):
 			seed = int(s.get_slice("=", 1))
+
+		# spawn config
+		elif s.begins_with("spawns_json="):
+			spawns_json = s.get_slice("=", 1)
+		elif s.begins_with("spawns_b64="):
+			spawns_b64 = s.get_slice("=", 1)
 
 		# internal tcp target (Zone -> Realm)
 		elif s.begins_with("realm_host="):

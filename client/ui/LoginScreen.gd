@@ -9,9 +9,9 @@ signal login_success(token: String, account_id: int, username: String)
 @onready var user_login_container: Control = $Panel/VBox/UserLoginContainer
 @onready var mode_row: Control = $Panel/VBox/UserLoginContainer/ModeRow
 @onready var mode_opt: OptionButton = $Panel/VBox/UserLoginContainer/ModeRow/Mode
-@onready var username_edit: LineEdit = $Panel/VBox/UserLoginContainer/Username
-@onready var email_edit: LineEdit = $Panel/VBox/UserLoginContainer/Email
-@onready var password_edit: LineEdit = $Panel/VBox/UserLoginContainer/Password
+@onready var username_edit: LineEdit = $Panel/VBox/UserLoginContainer/UsernameContainer/Username
+@onready var email_edit: LineEdit = $Panel/VBox/UserLoginContainer/EmailContainer/Email
+@onready var password_edit: LineEdit = $Panel/VBox/UserLoginContainer/PasswordContainer/Password
 @onready var login_btn: Button = $Panel/VBox/UserLoginContainer/LoginButton
 
 @onready var logout_container: Control = $Panel/VBox/LogoutContainer
@@ -60,6 +60,7 @@ var _selected_character_name: String = ""
 # maps state
 var _maps: Array = [] # Array[Dictionary]
 var _selected_map_scene_path: String = "" # passed to Realm as map_id (scene path)
+var _selected_map_id: int = 0
 
 const DEFAULT_HUB_SCENE := "res://maps/HubMap.tscn"
 
@@ -163,7 +164,7 @@ func _on_mode_changed(_idx: int) -> void:
 	if _is_authed:
 		return
 	var is_register := mode_opt.get_selected_id() == MODE_REGISTER
-	email_edit.visible = is_register
+	email_edit.get_parent().visible = is_register
 	login_btn.text = "Create Account" if is_register else "Login"
 	status_lbl.text = ""
 
@@ -482,7 +483,8 @@ func _render_maps() -> void:
 
 func _auto_select_default_map() -> void:
 	_selected_map_scene_path = ""
-
+	_selected_map_id = 0
+	
 	# Prefer slug == "hub"
 	var hub_index := -1
 	for i in range(_maps.size()):
@@ -501,15 +503,20 @@ func _auto_select_default_map() -> void:
 		_on_map_selected()
 		return
 
+	_selected_map_id = 0
 	_selected_map_scene_path = DEFAULT_HUB_SCENE
 
 func _on_map_selected() -> void:
 	var sel := maps_list.get_selected_items()
 	if sel.is_empty():
+		_selected_map_id = 0
 		_selected_map_scene_path = DEFAULT_HUB_SCENE
 		return
 
-	var m = _maps[int(sel[0])]
+	var m: Dictionary = _maps[int(sel[0])]
+
+	_selected_map_id = int(m.get("id", 0))
+
 	_selected_map_scene_path = str(m.get("scenePath", m.get("scene_path", ""))).strip_edges()
 	if _selected_map_scene_path == "":
 		_selected_map_scene_path = DEFAULT_HUB_SCENE
@@ -658,7 +665,15 @@ func _create_zone() -> void:
 		status_lbl.text = "Select a character first."
 		return
 
-	var map_id := _selected_map_scene_path if _selected_map_scene_path != "" else DEFAULT_HUB_SCENE
+	var map_id := int(_selected_map_id)
+	var scene_path := (_selected_map_scene_path if _selected_map_scene_path != "" else DEFAULT_HUB_SCENE)
+
+	# If the API didn’t provide an id for some reason, block creation
+	# (because Realm needs numeric id to call /api/maps/{id}/spawns)
+	if map_id <= 0:
+		status_lbl.text = "Select a valid map."
+		return
+
 	var seed := randi()
 	var capacity := 32
 
@@ -666,4 +681,4 @@ func _create_zone() -> void:
 
 	var cm := _get_client_main()
 	if cm and cm.has_method("request_create_zone"):
-		cm.call("request_create_zone", map_id, seed, capacity)
+		cm.call("request_create_zone", map_id, scene_path, seed, capacity)

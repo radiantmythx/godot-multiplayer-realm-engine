@@ -4,6 +4,9 @@ class_name ZoneWorld
 
 var log: Callable = func(_m): pass
 
+# NEW: root of the instantiated map scene (what MonsterSystem should search under)
+var map_root: Node = null
+
 var world_root: Node = null
 var players_root: Node = null
 var spawn_points: Array[Node3D] = []
@@ -13,6 +16,7 @@ func reset() -> void:
 	if world_root and is_instance_valid(world_root):
 		world_root.queue_free()
 	world_root = null
+	map_root = null
 	players_root = null
 	spawn_points.clear()
 	spawn_rr_index = 0
@@ -32,6 +36,9 @@ func load_map_scene(owner: Node, path: String, _seed: int) -> void:
 	world_root = (ps as PackedScene).instantiate()
 	world_root.name = "World"
 	owner.add_child(world_root)
+
+	# NEW: map_root points at the instantiated scene root
+	map_root = world_root
 
 	players_root = world_root.get_node_or_null("Players")
 	if players_root == null:

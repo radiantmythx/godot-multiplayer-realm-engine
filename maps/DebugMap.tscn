@@ -62,3 +62,22 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, 2.10268)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.220029, 0, -1.97344)
 
 [node name="Players" type="Node3D" parent="."]
+
+[node name="MonsterSpawners" type="Node3D" parent="."]
+
+[node name="Marker3D" type="Marker3D" parent="MonsterSpawners"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.74492, 0, -7.90672)
+
+[node name="Marker3D2" type="Marker3D" parent="MonsterSpawners"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.45071, 0, -7.90672)
+
+[node name="Marker3D3" type="Marker3D" parent="MonsterSpawners"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.45071, 0, 5.3201)
+
+[node name="Marker3D4" type="Marker3D" parent="MonsterSpawners"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.6543, 0, 5.3201)
+
+[node name="BossSpawner" type="Node3D" parent="."]
+
+[node name="Marker3D" type="Marker3D" parent="BossSpawner"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -10.983)

@@ -43,7 +43,7 @@ func c_request_zone_list() -> void:
 	pass
 
 @rpc("any_peer", "reliable")
-func c_request_create_zone(_map_id: String, _seed: int, _capacity: int) -> void:
+func c_request_create_zone(map_id: int, scene_path: String, seed: int, capacity: int) -> void:
 	pass
 
 # UPDATED: include character_name so Realm can embed it in the signed join ticket.

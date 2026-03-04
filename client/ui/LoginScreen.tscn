@@ -55,15 +55,38 @@ popup/item_0/id = 0
 popup/item_1/text = "Register"
 popup/item_1/id = 1
 
-[node name="Username" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
+[node name="UsernameContainer" type="HBoxContainer" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 
-[node name="Email" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
+[node name="Label" type="Label" parent="Panel/VBox/UserLoginContainer/UsernameContainer"]
+layout_mode = 2
+text = "Username: "
+
+[node name="Username" type="LineEdit" parent="Panel/VBox/UserLoginContainer/UsernameContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="EmailContainer" type="HBoxContainer" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2
 
-[node name="Password" type="LineEdit" parent="Panel/VBox/UserLoginContainer"]
+[node name="Label" type="Label" parent="Panel/VBox/UserLoginContainer/EmailContainer"]
 layout_mode = 2
-secret = true
+text = "E-mail: "
+
+[node name="Email" type="LineEdit" parent="Panel/VBox/UserLoginContainer/EmailContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="PasswordContainer" type="HBoxContainer" parent="Panel/VBox/UserLoginContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/UserLoginContainer/PasswordContainer"]
+layout_mode = 2
+text = "Password: "
+
+[node name="Password" type="LineEdit" parent="Panel/VBox/UserLoginContainer/PasswordContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="LoginButton" type="Button" parent="Panel/VBox/UserLoginContainer"]
 layout_mode = 2

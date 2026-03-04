@@ -34,7 +34,6 @@ func _accept_zone_tcp() -> void:
 			ProcLog.lines(["[REALM] Zone TCP connected: ", key])
 
 func _poll_zone_tcp() -> void:
-	# iterate backwards so we can remove safely
 	for i in range(zone_peers.size() - 1, -1, -1):
 		var p := zone_peers[i]
 		var status := p.get_status()
@@ -86,7 +85,8 @@ func _on_zone_msg(p: StreamPeerTCP, m: Dictionary) -> void:
 		_:
 			ProcLog.lines(["[REALM] Unknown zone msg: ", m])
 
-func spawn_zone_process(inst: Dictionary, ticket_secret: String) -> void:
+# UPDATED: add spawns_b64 (base64 JSON array)
+func spawn_zone_process(inst: Dictionary, ticket_secret: String, spawns_b64: String = "") -> void:
 	var exe_path := OS.get_executable_path()
 
 	var log_dir := ProjectSettings.globalize_path("user://zone_logs")
@@ -98,16 +98,27 @@ func spawn_zone_process(inst: Dictionary, ticket_secret: String) -> void:
 		f.store_line("[REALM] spawned zone process marker")
 		f.close()
 
-	var args := [
+	# IMPORTANT:
+	# ZoneServer parses args as:
+	#   port=, instance_id=, map_id=, seed=, realm_host=, realm_port=, ticket_secret=, log=
+	# (it strips leading --, so we can pass with or without --, but keep names consistent)
+	var args: Array = [
 		"--mode=zone",
-		"--port=%d" % int(inst.port),
-		"--instance_id=%d" % int(inst.instance_id),
-		"--map_id=%s" % str(inst.map_id),
-		"--seed=%d" % int(inst.seed),
-		"--realm_port=%d" % internal_tcp_port,
-		"--ticket_secret=%s" % ticket_secret,
-		"--log=%s" % log_path,
+		"port=%d" % int(inst.port),
+		"instance_id=%d" % int(inst.instance_id),
+		"map_id=%s" % str(inst.map_id),
+		"seed=%d" % int(inst.seed),
+
+		# internal tcp target for Zone -> Realm
+		"realm_host=%s" % listen_host,
+		"realm_port=%d" % internal_tcp_port,
+
+		"ticket_secret=%s" % ticket_secret,
+		"log=%s" % log_path,
 	]
+
+	if not spawns_b64.is_empty():
+		args.append("spawns_b64=%s" % spawns_b64)
 
 	var pid := OS.create_process(exe_path, args)
 
